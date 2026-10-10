@@ -43,11 +43,11 @@ main() {
 
     # Set performance mode (LITTLE cpu0 + BIG cpu4-5)
     echo performance >/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-    echo 1416000 >/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
-    echo 1416000 >/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
+    cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq >/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+    cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq >/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
     echo performance >/sys/devices/system/cpu/cpu4/cpufreq/scaling_governor
-    echo 1584000 >/sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq
-    echo 1584000 >/sys/devices/system/cpu/cpu4/cpufreq/scaling_min_freq
+    cat /sys/devices/system/cpu/cpu4/cpufreq/cpuinfo_max_freq >/sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq
+    cat /sys/devices/system/cpu/cpu4/cpufreq/cpuinfo_max_freq >/sys/devices/system/cpu/cpu4/cpufreq/scaling_min_freq
 
     # GPU: lock to performance for DRM rendering
     echo performance >/sys/devices/platform/soc@3000000/1800000.gpu/devfreq/1800000.gpu/governor 2>/dev/null

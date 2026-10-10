@@ -950,6 +950,13 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
 				GFX_sync();
 				continue;
 			} else {
+				// START tap: leave the app and keep the episode playing (the quit
+				// modal's "Yes"). Polled every frame so Start + Vol is never a tap.
+				if (PAD_tappedStart(SDL_GetTicks())) {
+					Podcast_cleanupCatalog();
+					return MODULE_EXIT_QUIT;
+				}
+
 				if (PAD_justPressed(BTN_A)) {
 					toggle_podcast_playback();
 					ModuleCommon_recordInputTime();

@@ -119,6 +119,7 @@ static const ControlHelp player_controls[] = {
 	{"R2/" BTN_FN2_NAME, "Toggle Lyrics"},
 	{"Select", "Screen Off"},
 	{"Select + A", "Wake Screen"},
+	{"Start", "Play in Background"},
 	{NULL, NULL}};
 
 // Radio playing controls (B shown in footer)
@@ -127,6 +128,7 @@ static const ControlHelp radio_playing_controls[] = {
 	{"Down/L1", "Prev Station"},
 	{"Select", "Screen Off"},
 	{"Select + A", "Wake Screen"},
+	{"Start", "Play in Background"},
 	{NULL, NULL}};
 
 // Podcast playing controls
@@ -136,6 +138,7 @@ static const ControlHelp podcast_playing_controls[] = {
 	{"Up/Down", "Playback Speed"},
 	{"Select", "Screen Off"},
 	{"Select + A", "Wake Screen"},
+	{"Start", "Play in Background"},
 	{NULL, NULL}};
 
 // Generic/default controls

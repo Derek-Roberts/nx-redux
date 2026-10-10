@@ -78,6 +78,10 @@ static void player_show_toast(const char* msg) {
 // Screen off state (module-local)
 static bool screen_off = false;
 
+// Set by a START tap on Now Playing: leave the app and keep playback running
+// (the same outcome as "Yes" on the quit modal's background-playback prompt).
+static bool exit_to_background = false;
+
 static char loaded_artwork_path[MUSIC_SERVICE_MAX_PATH] = "";
 static char presentation_identity[MUSIC_SERVICE_MAX_PATH * 3 + MUSIC_SERVICE_MAX_TITLE + MUSIC_SERVICE_MAX_ARTIST + 16] = "";
 static SDL_Surface* presentation_artwork;
@@ -470,6 +474,12 @@ static bool handle_playing_input(SDL_Surface* screen, PlayerInternalState* state
 		ModuleCommon_recordInputTime();
 	}
 
+	// Polled every frame so a Start + Vol color-temp combo is never a tap.
+	if (PAD_tappedStart(SDL_GetTicks())) {
+		exit_to_background = true;
+		return true;
+	}
+
 	if (PAD_justPressed(BTN_A)) {
 		MusicClient_toggle();
 		*dirty = 1;
@@ -716,6 +726,13 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
 			}
 		} else if (state == PLAYER_INTERNAL_PLAYING) {
 			if (handle_playing_input(screen, &state, &dirty)) {
+				if (exit_to_background) {
+					exit_to_background = false;
+					cleanup_album_art_background();
+					cleanup_playback(true);
+					Browser_freeEntries(&browser);
+					return MODULE_EXIT_QUIT;
+				}
 				continue;
 			}
 		}
@@ -894,6 +911,13 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
 		// Normal input handling
 		if (PAD_anyPressed()) {
 			ModuleCommon_recordInputTime();
+		}
+
+		// Polled every frame so a Start + Vol color-temp combo is never a tap.
+		if (PAD_tappedStart(SDL_GetTicks())) {
+			cleanup_album_art_background();
+			cleanup_playback(true);
+			return MODULE_EXIT_QUIT;
 		}
 
 		if (PAD_justPressed(BTN_A)) {
@@ -1111,6 +1135,12 @@ ModuleExitReason PlayerModule_runResume(SDL_Surface* screen, const ResumeState* 
 
 			// Delegate to shared playing input handler
 			if (handle_playing_input(screen, &state, &dirty)) {
+				if (exit_to_background) {
+					exit_to_background = false;
+					cleanup_album_art_background();
+					cleanup_playback(true);
+					return MODULE_EXIT_QUIT;
+				}
 				// If state left playing (BTN_B or all tracks ended), return to menu immediately
 				// Don't continue the loop or handle_playing_input will re-trigger track-ended logic
 				if (state != PLAYER_INTERNAL_PLAYING) {

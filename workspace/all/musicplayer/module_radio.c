@@ -434,6 +434,13 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 			int station_count = Radio_getStations(&stations);
 			ListView* lv = RadioList_view();
 
+			// START tap: leave the app and keep the station playing (the quit
+			// modal's "Yes"). Polled every frame so Start + Vol is never a tap.
+			if (PAD_tappedStart(SDL_GetTicks())) {
+				cleanup_album_art_background();
+				return MODULE_EXIT_QUIT;
+			}
+
 			if (PAD_justPressed(BTN_UP) || PAD_justPressed(BTN_R1)) {
 				if (station_count > 1) {
 					lv->selected = (lv->selected + 1) % station_count;

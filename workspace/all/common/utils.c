@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
@@ -840,6 +841,28 @@ void ROM_mediaArtVariantPath(const char* rom_path, const char* variant,
 	snprintf(out, out_size, "%s/%s/%s", base_path, variant, slash + 1);
 }
 
+// Game art the companion app (NX Redux Mobile) fetched may be stored as a JPEG under the same name:
+// .media/screenshot/Game.jpg where the path builders name Game.png. The extensions tried, after .png.
+static const char* art_alt_exts[] = {".jpg", ".jpeg"};
+
+bool ROM_artExists(char* path, size_t size) {
+	if (exists(path))
+		return true;
+	size_t len = strlen(path);
+	if (len < 4 || strcasecmp(path + len - 4, ".png") != 0)
+		return false;
+	char alt[MAX_PATH];
+	for (int i = 0; i < (int)(sizeof(art_alt_exts) / sizeof(art_alt_exts[0])); i++) {
+		if (snprintf(alt, sizeof(alt), "%.*s%s", (int)(len - 4), path, art_alt_exts[i]) >= (int)sizeof(alt))
+			continue;
+		if (exists(alt) && strlen(alt) < size) {
+			snprintf(path, size, "%s", alt);
+			return true;
+		}
+	}
+	return false;
+}
+
 // Maps an ArtType (config.h: 0 mix, 1 screenshot, 2 box art) to its variant
 // folder. Kept int-typed so utils.c stays free of config.h.
 static const char* artVariantFolder(int art_type) {
@@ -877,7 +900,7 @@ static bool folderGameArtPath(const char* rom_path, const char* variant, char* o
 	}
 	char path[MAX_PATH];
 	ROM_mediaArtVariantPath(dir, variant, path, sizeof(path));
-	if (!exists(path))
+	if (!ROM_artExists(path, sizeof(path)))
 		return false;
 	snprintf(out, out_size, "%s", path);
 	return true;
@@ -888,7 +911,7 @@ void ROM_displayArtPath(const char* rom_path, int art_type, bool fallback_to_mix
 	const char* variant = artVariantFolder(art_type);
 	if (variant) {
 		ROM_mediaArtVariantPath(rom_path, variant, out, out_size);
-		if (exists(out) || folderGameArtPath(rom_path, variant, out, out_size))
+		if (ROM_artExists(out, out_size) || folderGameArtPath(rom_path, variant, out, out_size))
 			return;
 		// Caller asked for this variant only: leave the missing path in place
 		// so nothing is drawn, rather than substituting a different image.
@@ -900,17 +923,17 @@ void ROM_displayArtPath(const char* rom_path, int art_type, bool fallback_to_mix
 	ROM_mediaArtPath(rom_path, out, out_size);
 	// The mix asked for but never made (the scraper no longer composes it):
 	// the screenshot instead, when there is one.
-	if (!variant && !exists(out)) {
+	if (!variant && !ROM_artExists(out, out_size)) {
 		char shot[MAX_PATH];
 		ROM_mediaArtVariantPath(rom_path, "screenshot", shot, sizeof(shot));
-		if (exists(shot))
+		if (ROM_artExists(shot, sizeof(shot)))
 			snprintf(out, out_size, "%s", shot);
 	}
 }
 
 bool ROM_findArt(const char* rom_path, char* out, size_t out_size) {
 	ROM_mediaArtPath(rom_path, out, out_size);
-	if (exists(out))
+	if (ROM_artExists(out, out_size))
 		return true;
 	// multi-disc folder games: art named after the containing folder, one level up
 	char dir[MAX_PATH];
@@ -925,16 +948,16 @@ bool ROM_findArt(const char* rom_path, char* out, size_t out_size) {
 		return false;
 	*parent_slash = '\0';
 	snprintf(out, out_size, "%s/.media/%s.png", dir, parent_slash + 1);
-	return exists(out);
+	return ROM_artExists(out, out_size);
 }
 
 bool ROM_findScreenshot(const char* rom_path, char* out, size_t out_size) {
 	ROM_mediaArtVariantPath(rom_path, "screenshot", out, out_size);
-	if (exists(out))
+	if (ROM_artExists(out, out_size))
 		return true;
 	char mix[MAX_PATH];
 	ROM_mediaArtPath(rom_path, mix, sizeof(mix));
-	if (exists(mix)) {
+	if (ROM_artExists(mix, sizeof(mix))) {
 		snprintf(out, out_size, "%s", mix);
 		return true;
 	}
@@ -964,12 +987,12 @@ bool ROM_findListArt(const char* rom_path, int art, char* out, size_t out_size) 
 	const char* folder = listArtFolder(art);
 	if (folder) {
 		ROM_mediaArtVariantPath(rom_path, folder, out, out_size);
-		if (exists(out) || folderGameArtPath(rom_path, folder, out, out_size))
+		if (ROM_artExists(out, out_size) || folderGameArtPath(rom_path, folder, out, out_size))
 			return true;
 		// Mix: an older library's mix (and a Port's picture) is the root .media/<name>.png
 		if (art == 1) {
 			ROM_mediaArtPath(rom_path, out, out_size);
-			if (exists(out) || folderGameArtPath(rom_path, NULL, out, out_size))
+			if (ROM_artExists(out, out_size) || folderGameArtPath(rom_path, NULL, out, out_size))
 				return true;
 		}
 	}

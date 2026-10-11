@@ -86,6 +86,10 @@ void ROM_mediaArtPath(const char* rom_path, char* out, size_t out_size);
 // <console>/.media/<variant>/<game>.png; NULL or "" gives the root mix path.
 void ROM_mediaArtVariantPath(const char* rom_path, const char* variant,
 							 char* out, size_t out_size);
+// True when the game art at `path` (a built .media/...png path) exists, as named or as the same name with
+// .jpg or .jpeg (the companion app stores some fetched art as JPEG); `path` is then rewritten to the file
+// found. A miss leaves `path` as given. Only for reading art: paths art is written to stay .png.
+bool ROM_artExists(char* path, size_t size);
 // Path the game lists should display for an ArtType (config.h). With
 // `fallback_to_mix`, a missing variant resolves to the root mix composite
 // (older libraries keep showing art); without it, `out` is left on the

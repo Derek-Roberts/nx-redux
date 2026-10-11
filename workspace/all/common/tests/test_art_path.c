@@ -196,6 +196,67 @@ int main(void) {
 		assert(strcmp(out, want) == 0);
 	}
 
+	// 9. JPEG art (the companion app stores some fetched pictures as .jpg/.jpeg under the same name): found where
+	// the .png is missing, a .png still wins, and a miss keeps naming the .png
+	char snes[512], sn_media[512], snrom[512], got[512];
+	snprintf(snes, sizeof(snes), "%s/Roms/Super Nintendo (SFC)", root);
+	snprintf(sn_media, sizeof(sn_media), "%s/.media", snes);
+	snprintf(mk, sizeof(mk), "mkdir -p '%s/screenshot' '%s/boxart' '%s/wheel'", sn_media, sn_media, sn_media);
+	assert(system(mk) == 0);
+	snprintf(snrom, sizeof(snrom), "%s/Super Metroid.sfc", snes);
+	mkfile(snrom);
+	assert(!ROM_findScreenshot(snrom, out, sizeof(out)));
+	snprintf(want, sizeof(want), "%s/screenshot/Super Metroid.png", sn_media);
+	assert(strcmp(out, want) == 0);
+	snprintf(want, sizeof(want), "%s/screenshot/Super Metroid.jpg", sn_media);
+	mkfile(want);
+	assert(ROM_findScreenshot(snrom, out, sizeof(out)));
+	assert(strcmp(out, want) == 0);
+	ROM_displayArtPath(snrom, 1, false, out, sizeof(out));
+	assert(strcmp(out, want) == 0);
+	ROM_displayArtPath(snrom, 0, false, out, sizeof(out)); // no mix: the screenshot, as a .jpg
+	assert(strcmp(out, want) == 0);
+	assert(!ROM_findListArt(snrom, 3, out, sizeof(out))); // no wheel: the .jpg screenshot
+	assert(strcmp(out, want) == 0);
+	snprintf(want, sizeof(want), "%s/wheel/Super Metroid.jpeg", sn_media);
+	mkfile(want);
+	assert(ROM_findListArt(snrom, 3, out, sizeof(out)));
+	assert(strcmp(out, want) == 0);
+	snprintf(want, sizeof(want), "%s/boxart/Super Metroid.jpg", sn_media);
+	mkfile(want);
+	ROM_displayArtPath(snrom, 2, false, out, sizeof(out));
+	assert(strcmp(out, want) == 0);
+	snprintf(want, sizeof(want), "%s/boxart/Super Metroid.png", sn_media); // a .png beside it wins
+	mkfile(want);
+	ROM_displayArtPath(snrom, 2, false, out, sizeof(out));
+	assert(strcmp(out, want) == 0);
+	// the root picture as a .jpg (ROM_findArt), and the multi-disc fallback beside the folder
+	snprintf(want, sizeof(want), "%s/Super Metroid.jpg", sn_media);
+	mkfile(want);
+	assert(ROM_findArt(snrom, out, sizeof(out)));
+	assert(strcmp(out, want) == 0);
+	snprintf(mk, sizeof(mk), "mkdir -p '%s/Chrono Trigger'", snes);
+	assert(system(mk) == 0);
+	snprintf(got, sizeof(got), "%s/Chrono Trigger/Disc 1.sfc", snes);
+	mkfile(got);
+	snprintf(want, sizeof(want), "%s/Chrono Trigger.jpeg", sn_media);
+	mkfile(want);
+	assert(ROM_findArt(got, out, sizeof(out)));
+	assert(strcmp(out, want) == 0);
+	// ROM_artExists itself: an existing path untouched, a non-.png miss left alone, a too-small buffer a miss
+	snprintf(got, sizeof(got), "%s/Super Metroid.png", sn_media);
+	assert(ROM_artExists(got, sizeof(got)));
+	snprintf(want, sizeof(want), "%s/Super Metroid.jpg", sn_media);
+	assert(strcmp(got, want) == 0);
+	snprintf(got, sizeof(got), "%s/Super Metroid.gif", sn_media);
+	assert(!ROM_artExists(got, sizeof(got)));
+	snprintf(want, sizeof(want), "%s/Super Metroid.gif", sn_media);
+	assert(strcmp(got, want) == 0);
+	snprintf(got, sizeof(got), "%s/Chrono Trigger.png", sn_media);
+	assert(!ROM_artExists(got, strlen(got) + 1)); // the .jpeg name does not fit: a miss, path unchanged
+	snprintf(want, sizeof(want), "%s/Chrono Trigger.png", sn_media);
+	assert(strcmp(got, want) == 0);
+
 	snprintf(mk, sizeof(mk), "rm -rf '%s'", root);
 	assert(system(mk) == 0);
 	printf("test_art_path: ok\n");

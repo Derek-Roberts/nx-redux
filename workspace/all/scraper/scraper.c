@@ -218,13 +218,14 @@ typedef struct {
 static bool count_game_cb(const ScanGame* g, void* ud) {
 	GameCounts* c = ud;
 	c->roms++;
+	// each picture as a .png, or a .jpg/.jpeg of the same name (the companion app's art)
 	char variant[512];
 	Scraper_variantPath(g->art_png, "screenshot", variant, sizeof(variant));
-	bool has_screenshot = exists(variant);
+	bool has_screenshot = ROM_artExists(variant, sizeof(variant));
 	Scraper_variantPath(g->art_png, "boxart", variant, sizeof(variant));
-	bool has_boxart = exists(variant);
+	bool has_boxart = ROM_artExists(variant, sizeof(variant));
 	Scraper_variantPath(g->art_png, "mix", variant, sizeof(variant));
-	bool has_mix = exists(variant);
+	bool has_mix = ROM_artExists(variant, sizeof(variant));
 	if (ScraperPrefs_isComplete(&scraper_prefs, has_screenshot, has_boxart, has_mix))
 		c->scraped++;
 	return true;
@@ -420,14 +421,15 @@ static bool scan_rom_cb(const ScanGame* g, void* ud) {
 	// The scraper stores a screenshot and a box art per game, under .media/<variant>/, each only when
 	// ScreenScraper had it. A game with either counts as scraped, and with Generate mix on it also needs the
 	// .media/mix/ mix (an old root .media/<name>.png mix doesn't count, so a re-scrape upgrades it); a mix alone
-	// doesn't count (a re-scrape adds the images the menus use).
+	// doesn't count (a re-scrape adds the images the menus use). A .jpg of the same name (the companion app's art)
+	// counts like the .png.
 	char variant[512];
 	Scraper_variantPath(rom->art_png, "screenshot", variant, sizeof(variant));
-	rom->has_screenshot = exists(variant);
+	rom->has_screenshot = ROM_artExists(variant, sizeof(variant));
 	Scraper_variantPath(rom->art_png, "boxart", variant, sizeof(variant));
-	rom->has_boxart = exists(variant);
+	rom->has_boxart = ROM_artExists(variant, sizeof(variant));
 	Scraper_variantPath(rom->art_png, "mix", variant, sizeof(variant));
-	rom->has_mix = exists(variant);
+	rom->has_mix = ROM_artExists(variant, sizeof(variant));
 	rom->has_artwork = ScraperPrefs_isComplete(&scraper_prefs, rom->has_screenshot, rom->has_boxart, rom->has_mix);
 	return true;
 }

@@ -91,9 +91,12 @@ void get_rom_image_path(char* rom_file, char* out_image_path) {
 	char rom_abs[MAX_PATH];
 	snprintf(rom_abs, sizeof(rom_abs), "%s/%s", ROMS_PATH, rom_file);
 	// the game's screenshot (the mix composite is retired), else an older library's mix
+	// (either as a .png, or a .jpg/.jpeg the companion app saved)
 	ROM_mediaArtVariantPath(rom_abs, "screenshot", out_image_path, STR_MAX - 1);
-	if (!exists(out_image_path))
+	if (!ROM_artExists(out_image_path, STR_MAX - 1)) {
 		ROM_mediaArtPath(rom_abs, out_image_path, STR_MAX - 1);
+		ROM_artExists(out_image_path, STR_MAX - 1);
+	}
 }
 
 int play_activity_db_transaction(sqlite3* game_log_db, int (*exec_transaction)(sqlite3*)) {

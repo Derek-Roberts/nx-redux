@@ -1163,7 +1163,7 @@ static void artFetchLanded(const char* rom, const char* out_png) {
 }
 
 // Delete Rom: remove the deleted game's art, every picture the scraper writes and the lists read
-// (<dir>/.media/<variant>/<stem>.png and the root <dir>/.media/<stem>.png). art_rom is the ROM file, or a folder game's
+// (<dir>/.media/<variant>/<stem>.png and the root <dir>/.media/<stem>.png, and a .jpg/.jpeg of each). art_rom is the ROM file, or a folder game's
 // folder (its art is named after the folder, beside it). Exact paths only: another game whose name starts the same keeps
 // its art, and the console's own background (.media/bg.png) is never a game's. Saves and states are the player's: kept.
 static void deleteGameArt(const char* art_rom) {
@@ -1175,6 +1175,15 @@ static void deleteGameArt(const char* art_rom) {
 			continue;
 		unlink(png);
 		thumbCacheInvalidate(png); // a game later added under the name must not show the cached picture
+		// the same picture as a .jpg/.jpeg (the companion app's art): ROM_artExists finds each in turn once the
+		// .png is gone
+		char alt[MAX_PATH];
+		for (;;) {
+			snprintf(alt, sizeof(alt), "%s", png);
+			if (!ROM_artExists(alt, sizeof(alt)) || unlink(alt) != 0)
+				break;
+			thumbCacheInvalidate(alt);
+		}
 	}
 }
 

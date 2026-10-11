@@ -13,6 +13,7 @@
 #include "config.h"
 #include "arcade_names.h"
 #include "collname.h"
+#include "romkey.h"
 #include "emulist_model.h"
 #include "api.h"
 
@@ -36,12 +37,14 @@ void Content_setSimpleMode(bool mode) {
 ///////////////////////////////////////
 // Helpers
 
+// The letter-jump group of a name, in EntryArray_sort's order (strcasecmp: bytes compared after tolower): 0 for
+// what sorts before 'a' (digits, most punctuation), 1-26 for a-z, 27 for what sorts after 'z' ("{|}~" and every
+// UTF-8 lead byte), so each group is one run of the sorted list.
 static int getIndexChar(char* str) {
-	char i = 0;
-	char c = tolower(str[0]);
+	int c = tolower((unsigned char)str[0]);
 	if (c >= 'a' && c <= 'z')
-		i = (c - 'a') + 1;
-	return i;
+		return (c - 'a') + 1;
+	return c > 'z' ? 27 : 0;
 }
 
 static void getUniqueName(Entry* entry, char* out_name) {
@@ -93,7 +96,14 @@ static Hash* readMapFile(const char* map_path) {
 			tmp[0] = '\0';
 			char* key = line;
 			char* value = tmp + 1;
-			Hash_set(map, key, value);
+			// the name ends at the next tab (a stray third column) and loses trailing blanks and a lone CR: the
+			// caches are tab-separated, and a tab in a name made the Consoles cache unreadable (a rescan every boot)
+			value[strcspn(value, "\t")] = '\0';
+			size_t len = strlen(value);
+			while (len > 0 && isspace((unsigned char)value[len - 1]))
+				value[--len] = '\0';
+			if (len > 0) // an empty name would show as a blank row
+				Hash_set(map, key, value);
 		}
 	}
 	fclose(file);
@@ -197,8 +207,60 @@ static bool arcadeLabelRun(Directory* self, Hash* map, int start, int end) {
 	return ok;
 }
 
+// The map.txt files a collection's rows take their names from, each read once per build (a collection can list many
+// games across consoles; most share a handful of folders).
+typedef struct {
+	char dir[MAX_PATH];
+	Hash* map; // NULL: no map.txt there
+} AliasMap;
+typedef struct {
+	AliasMap* maps;
+	int count;
+} AliasMaps;
+
+static Hash* aliasMapFor(AliasMaps* maps, const char* dir) {
+	for (int i = 0; i < maps->count; i++)
+		if (exactMatch(maps->maps[i].dir, dir))
+			return maps->maps[i].map;
+	char map_path[MAX_PATH];
+	snprintf(map_path, sizeof(map_path), "%s/map.txt", dir);
+	Hash* map = readMapFile(map_path);
+	AliasMap* grown = realloc(maps->maps, (maps->count + 1) * sizeof(AliasMap));
+	if (!grown) {
+		if (map)
+			Hash_free(map);
+		return NULL; // out of memory: this row keeps its file name
+	}
+	maps->maps = grown;
+	snprintf(maps->maps[maps->count].dir, MAX_PATH, "%s", dir);
+	maps->maps[maps->count].map = map;
+	maps->count++;
+	return map;
+}
+
+static void aliasMapsFree(AliasMaps* maps) {
+	for (int i = 0; i < maps->count; i++)
+		if (maps->maps[i].map)
+			Hash_free(maps->maps[i].map);
+	free(maps->maps);
+	maps->maps = NULL;
+	maps->count = 0;
+}
+
+// A collection row's name from the game's own console list: the alias in the map.txt beside it, keyed as that list
+// keys it (a folder game by its folder, see RomKey_aliasSource). NULL when the console list names it from the file.
+static char* consoleAlias(AliasMaps* maps, const char* rom_path) {
+	char dir[MAX_PATH], key[MAX_PATH];
+	RomKey_aliasSource(rom_path, ROMS_PATH, dir, sizeof(dir), key, sizeof(key));
+	Hash* map = aliasMapFor(maps, dir);
+	return map ? Hash_get(map, key) : NULL;
+}
+
 static void Directory_index(Directory* self) {
 	int is_collection = prefixMatch(COLLECTIONS_PATH, self->path);
+	// a collection's games (not the Collections tab, whose rows are the collection files Collections/map.txt names)
+	bool collection_games = is_collection && !exactMatch(COLLECTIONS_PATH, self->path);
+	AliasMaps console_maps = {NULL, 0};
 	int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || is_collection; // not alphabetized
 
 	char map_path[MAX_PATH];
@@ -206,6 +268,8 @@ static void Directory_index(Directory* self) {
 						  : exactMatch(ROMS_PATH, self->path) ? SDCARD_PATH // Consoles tab: the old root's map.txt
 															  : self->path;
 	snprintf(map_path, sizeof(map_path), "%s/map.txt", map_dir);
+	// for a collection's games this is only the legacy Collections/map.txt (keyed by bare file name, which older
+	// builds' Rename Rom wrote): still honoured, after the game's own console map.txt
 	Hash* map = readMapFile(map_path);
 	// Recents names come from the alias recorded at launch (a Rename or the
 	// arcade title it showed then); the arcade table must not override that.
@@ -219,7 +283,9 @@ static void Directory_index(Directory* self) {
 		if (!slash)
 			continue;
 		char* filename = slash + 1;
-		char* alias = map ? Hash_get(map, filename) : NULL;
+		char* alias = collection_games ? consoleAlias(&console_maps, entry->path) : NULL;
+		if (!alias && map)
+			alias = Hash_get(map, filename);
 		bool from_map = alias != NULL;
 		if (!alias && use_arcade && entry->type == ENTRY_ROM)
 			alias = (char*)arcadeName(entry->path);
@@ -340,8 +406,12 @@ static void Directory_index(Directory* self) {
 		if (!skip_index) {
 			int a = getIndexChar(entry->name);
 			if (a != alpha) {
-				index = self->alphas.count;
-				IntArray_push(&self->alphas, i);
+				// a list not in getIndexChar's order (a name changed after the sort) could start more groups than
+				// alphas holds: the overflow joins the last group rather than pointing past it
+				if (self->alphas.count < INT_ARRAY_MAX) {
+					index = self->alphas.count;
+					IntArray_push(&self->alphas, i);
+				}
 				alpha = a;
 			}
 			entry->alpha = index;
@@ -352,6 +422,7 @@ static void Directory_index(Directory* self) {
 
 	if (map)
 		Hash_free(map);
+	aliasMapsFree(&console_maps);
 }
 
 ///////////////////////////////////////
@@ -543,7 +614,8 @@ int isConsoleDir(char* path) {
 // per-console Roms/<Console>/map.txt (rom aliases), the Emus pak roots
 // consulted by hasEmu (pak add/remove), and the res/arcade name tables.
 // In-app mutations go through Content_invalidateEmulist and don't rely on
-// this check.
+// this check; the fingerprint itself is taken once per process and kept
+// until one of them (or Content_sourcesChanged) says a source changed.
 //
 // Change detection is by EQUALITY of a fingerprint of the source mtimes that
 // is recorded in the cache file, not by "source newer than cache": a source
@@ -556,7 +628,7 @@ int isConsoleDir(char* path) {
 
 // Bump this whenever the index-building logic changes, so existing caches are
 // rebuilt once after an upgrade without users clearing them.
-#define CACHE_SCHEMA_TAG "romindex-v6"
+#define CACHE_SCHEMA_TAG "romindex-v7"
 static uint64_t fnv1a64(const char* str) {
 	uint64_t h = 0xCBF29CE484222325ULL;
 	for (; *str; str++)
@@ -634,15 +706,35 @@ static uint64_t cacheSourcesFingerprint(void) {
 	return fp;
 }
 
+// The walk above is ~100 stats on a stock card (5 roots, each arcade table, and a stat, the folder and its
+// map.txt per Roms entry), and the Consoles memo, Search, and Delete Rom (before and after) each need it. It is
+// taken once and kept like the memo: out-of-band card edits are picked up at the next nextui start, which follows
+// every game, and every in-app write to a source clears it -- Content_sourcesChanged (an edited map.txt: Rename
+// Rom), Content_invalidateEmulist (Refresh Roms), Content_forgetRom (the delete and its map.txt clean-up).
+// UI thread only.
+static uint64_t src_fp = 0;
+static bool src_fp_valid = false;
+
+static uint64_t sourcesFingerprint(void) {
+	if (!src_fp_valid) {
+		src_fp = cacheSourcesFingerprint();
+		src_fp_valid = true;
+	}
+	return src_fp;
+}
+
+void Content_sourcesChanged(void) {
+	src_fp_valid = false;
+}
+
 #define CACHE_FP_PREFIX "#fp="
 
 // serialize entries as "path\tname\n" lines and stage via writeFileAtomic so a
-// power cut can never leave a truncated cache. Refuses empty lists — an empty
-// cache newer than its sources would read back as valid-and-fresh and blank
-// the UI on every boot until an mtime bump forced a rescan.
+// power cut can never leave a truncated cache. Only the rom index uses it, and an empty one is written too (just the
+// "#fp=" header): the Consoles cache written beside it may still list consoles (folders holding no game file), and
+// refusing left the previous scan's index on the card for Search to read back. readEntryCacheFile never trusts an
+// empty index, so Search's rebuild finds it empty and shows no results, without a rescan.
 static void writeEntryCache(const char* cache_path, Array* entries, uint64_t fp) {
-	if (entries->count == 0)
-		return;
 	size_t cap = 16384, len = 0;
 	char* buf = malloc(cap);
 	if (!buf)
@@ -660,7 +752,9 @@ static void writeEntryCache(const char* cache_path, Array* entries, uint64_t fp)
 			}
 			buf = grown;
 		}
+		size_t row = len + strlen(entry->path) + 1;
 		len += snprintf(buf + len, cap - len, "%s\t%s\n", entry->path, entry->name);
+		Emulist_blankField(buf + row, strlen(entry->name)); // a tab or newline in a name would split the row
 	}
 	writeFileAtomic(cache_path, buf, len);
 	free(buf);
@@ -748,7 +842,9 @@ static Array* readEntryCacheFile(const char* cache_path, int type, const uint64_
 // Roms folder (~100 stats on a stock card), and the boot, each tab switch onto Consoles and every
 // MenuTabs_reload used to pay it again. In-app changes clear the memo (Content_invalidateEmulist,
 // Content_forgetRom, a stale Search index); out-of-band card edits are picked up at the next nextui
-// start, which follows every game. UI thread only.
+// start, which follows every game. A rename keeps the rows (its labels are read from map.txt as each
+// list is built) but clears the fingerprint (sourcesFingerprint), so Search sees its index is stale.
+// UI thread only.
 static Array* emu_memo = NULL; // Entries as the Consoles tab lists them (path, type, name)
 static int* emu_counts = NULL; // per memo row: the games opening it lists (the cache's third column)
 static uint64_t emu_fp = 0;	   // the fingerprint the rows were read or scanned against
@@ -771,7 +867,8 @@ static void dropEmulistMemo(void) {
 
 static void ensureEmulist(void);
 
-// "path\tname\tcount\n" rows after the "#fp=" header. Like writeEntryCache it refuses an empty list.
+// "path\tname\tcount\n" rows after the "#fp=" header. It refuses an empty list: readEmulistCache never trusts
+// one, so no consoles rescans each start (and finds any that appear).
 static void writeEmulistCache(Array* entries, const int* counts, uint64_t fp) {
 	if (entries->count == 0)
 		return;
@@ -881,7 +978,7 @@ int Content_consoleGameCount(const Entry* console_row) {
 // readEntryCacheFile plus the staleness gate: NULL (forcing a rescan) when any
 // cache source changed since the file was written.
 static Array* readEntryCache(const char* cache_path, int type) {
-	uint64_t fp = cacheSourcesFingerprint();
+	uint64_t fp = sourcesFingerprint();
 	return readEntryCacheFile(cache_path, type, &fp);
 }
 
@@ -892,6 +989,7 @@ static Array* readRomIndexCache(void) {
 void Content_invalidateEmulist(void) {
 	unlink(EMULIST_CACHE_PATH);
 	unlink(ROMINDEX_CACHE_PATH);
+	Content_sourcesChanged(); // Refresh Roms also picks up card edits made over SFTP since the start
 	dropEmulistMemo();
 }
 
@@ -907,7 +1005,7 @@ static bool readCacheFp(const char* cache_path, uint64_t* fp) {
 }
 
 bool Content_romCachesFresh(void) {
-	uint64_t now = cacheSourcesFingerprint(), index_fp = 0, emulist_fp = 0;
+	uint64_t now = sourcesFingerprint(), index_fp = 0, emulist_fp = 0;
 	return now && readCacheFp(ROMINDEX_CACHE_PATH, &index_fp) && index_fp == now &&
 		   readCacheFp(EMULIST_CACHE_PATH, &emulist_fp) && emulist_fp == now;
 }
@@ -987,6 +1085,8 @@ static int rewriteEntryCache(const char* cache_path, uint64_t new_fp, const char
 }
 
 void Content_forgetRom(const char* removed_path, bool caches_were_fresh) {
+	// the delete and its map.txt clean-up both changed fingerprint sources: the restamp below takes it anew
+	Content_sourcesChanged();
 	if (removed_path && exists((char*)removed_path)) {
 		// the delete failed (a read-only card) or only half-removed a folder game: the rom is still on the
 		// card, so its rows must not be dropped. The map.txt/collection clean-up still ran, so the caches
@@ -1015,7 +1115,7 @@ void Content_forgetRom(const char* removed_path, bool caches_were_fresh) {
 	// stale emulist forces the full rescan.
 	// The emulist's count column drops by the index rows removed, on every row that collates the folder
 	// (Emulist_adjustCount), so the counts stay what a rescan would write.
-	uint64_t fp = cacheSourcesFingerprint();
+	uint64_t fp = sourcesFingerprint();
 	char folder_path[MAX_PATH];
 	snprintf(folder_path, sizeof(folder_path), "%s/%s", ROMS_PATH, folder);
 	int dropped = 0;
@@ -1024,7 +1124,7 @@ void Content_forgetRom(const char* removed_path, bool caches_were_fresh) {
 		Content_invalidateEmulist();
 		return;
 	}
-	dropEmulistMemo(); // the next read takes the restamped emulist (lib_gen moves on)
+	dropEmulistMemo(); // the next read takes the restamped emulist against fp, kept (lib_gen moves on)
 }
 
 // Byte length of the rom-label part of an indexed name ("Zelda (GBA)" -> 5):
@@ -1042,8 +1142,9 @@ Array* Content_searchRoms(const char* query) {
 	if (!all_roms) {
 		// Force a build by calling getRoms() (which populates both caches). The memo must go first: it
 		// was validated earlier this process, and an in-app ROM rename since (an edited map.txt, part of
-		// the fingerprint) leaves it looking valid while the index is stale -- getRoms would then return
-		// the memo, never rescan, and Search would keep the old label.
+		// the fingerprint, which Content_sourcesChanged made us retake) leaves it looking valid while the
+		// index is stale -- getRoms would then return the memo, never rescan, and Search would keep the
+		// old label.
 		dropEmulistMemo();
 		Array* consoles = getRoms();
 		EntryArray_free(consoles);
@@ -1235,22 +1336,27 @@ typedef struct {
 	int len, cap;
 } FolderTally;
 
-static void tallyFolder(FolderTally* tally, const char* path, int added) {
+// False when out of memory (the folder isn't tallied): scanRoms then writes no counts, so the next start rescans
+// rather than trusting a count that is too low.
+static bool tallyFolder(FolderTally* tally, const char* path, int added) {
 	if (tally->len == tally->cap) {
 		int cap = tally->cap ? tally->cap * 2 : 64;
+		// each array grows on its own, and keeps its old block when its realloc fails: cap only moves once both
+		// hold cap rows
 		const char** paths = realloc(tally->paths, cap * sizeof(*paths));
 		if (!paths)
-			return;
+			return false;
 		tally->paths = paths;
 		int* counts = realloc(tally->counts, cap * sizeof(*counts));
 		if (!counts)
-			return;
+			return false;
 		tally->counts = counts;
 		tally->cap = cap;
 	}
 	tally->paths[tally->len] = path;
 	tally->counts[tally->len] = added;
 	tally->len++;
+	return true;
 }
 
 // The full filesystem scan behind a stale emulist: builds the Consoles rows, rewrites both caches stamped
@@ -1326,6 +1432,7 @@ static Array* scanRoms(uint64_t fp, int** counts_out) {
 	// one count per row, written as the emulist's third column (never NULL, even for no rows)
 	int* counts = calloc(entries->count + 1, sizeof(int));
 	*counts_out = counts;
+	bool counts_ok = counts != NULL;
 
 	// Build ROM index: scan every console dir for individual ROMs. indexRomDir
 	// pushes one entry per rom, named "<rom label> (<TAG>)".
@@ -1334,12 +1441,13 @@ static Array* scanRoms(uint64_t fp, int** counts_out) {
 		// rows added per indexed folder; a sibling indexed under two survivors is tallied twice, so the
 		// collated counts match the index rows exactly (what the old per-folder index read summed)
 		FolderTally tally = {NULL, NULL, 0, 0};
+		bool tallied = true;
 		for (int i = 0; i < entries->count; i++) {
 			Entry* console_entry = entries->items[i];
 
 			int before = rom_index->count;
 			indexRomDir(rom_index, console_entry->path);
-			tallyFolder(&tally, console_entry->path, rom_index->count - before);
+			tallied = tallyFolder(&tally, console_entry->path, rom_index->count - before) && tallied;
 
 			// Sibling folders that lost the display-name dedupe belong to this
 			// console in the game list too, so index them under the same label.
@@ -1353,17 +1461,23 @@ static Array* scanRoms(uint64_t fp, int** counts_out) {
 				if (Emulist_collates(console_entry->path, sib->path)) {
 					before = rom_index->count;
 					indexRomDir(rom_index, sib->path);
-					tallyFolder(&tally, sib->path, rom_index->count - before);
+					tallied = tallyFolder(&tally, sib->path, rom_index->count - before) && tallied;
 				}
 			}
 		}
-		if (counts && entries->count > 0) {
+		// a folder that missed the tally (out of memory) would read too low: the rows stay at 0 for this run and the
+		// emulist is left unwritten (below), so the next start rescans
+		if (!tallied)
+			counts_ok = false;
+		if (counts_ok && entries->count > 0) {
 			const char** console_paths = malloc(entries->count * sizeof(*console_paths));
 			if (console_paths) {
 				for (int i = 0; i < entries->count; i++)
 					console_paths[i] = ((Entry*)entries->items[i])->path;
 				Emulist_collateCounts(console_paths, entries->count, tally.paths, tally.counts, tally.len, counts);
 				free(console_paths);
+			} else {
+				counts_ok = false; // rows at 0: not worth caching
 			}
 		}
 		free(tally.paths);
@@ -1374,9 +1488,9 @@ static Array* scanRoms(uint64_t fp, int** counts_out) {
 	}
 	EntryArray_free(sibling_dirs);
 
-	// Write cache for next launch (refused for an empty scan — see writeEntryCache); without counts
+	// Write cache for next launch (refused for an empty scan — see writeEmulistCache); without counts
 	// (out of memory) it is left unwritten, so the next start rescans
-	if (counts)
+	if (counts_ok)
 		writeEmulistCache(entries, counts, fp);
 
 	return entries;
@@ -1386,7 +1500,7 @@ static void ensureEmulist(void) {
 	if (emu_valid)
 		return;
 	dropEmulistMemo();
-	uint64_t fp = cacheSourcesFingerprint();
+	uint64_t fp = sourcesFingerprint();
 	// Both caches are written together by scanRoms; a missing rom index with a valid emulist would
 	// satisfy the menu but leave Search permanently empty, so force the full rebuild that restores both.
 	int* counts = NULL;

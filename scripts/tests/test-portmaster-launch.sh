@@ -116,7 +116,7 @@ export DEVICE_CAPABILITIES="$(echo "${CAPS[@]}" | tr ' ' '\n' | sort -u | tr '\n
 EOF
   printf 'PORTS = "/mnt/SDCARD/Roms/PORTS"\nIMGS = "/mnt/SDCARD/Imgs/PORTS"\n' > "$PM/pylibs/harbourmaster/platform.py"
   mkdir -p "$PM/pylibs/harbourmaster/__pycache__"; touch "$PM/pylibs/harbourmaster/__pycache__/stale.pyc"
-  printf 'export HOME="/mnt/SDCARD/Data/home"\n' > "$PM/mod_TrimUI.txt"
+  printf 'CUR_TTY="/dev/fd/1"\nexport HOME="/mnt/SDCARD/Data/home"\n' > "$PM/mod_TrimUI.txt"
   echo 'nintendo-db' > "$PM/files/gamecontrollerdb_nintendo.txt"
   echo 'xbox-db'     > "$PM/files/gamecontrollerdb_xbox.txt"
   echo 'stale-db'    > "$PM/gamecontrollerdb.txt"
@@ -189,6 +189,8 @@ grep -q "\"$ROMS\"" "$PM/pylibs/harbourmaster/platform.py" && pass "patch: platf
 grep -q "\"$ROMS/.media\"" "$PM/pylibs/harbourmaster/platform.py" && pass "patch: platform.py IMGS path" || fail "patch: platform.py IMGS path missing"
 grep -q 'portmaster_install disabled' "$PM/pylibs/harbourmaster/platform.py" && pass "patch: portmaster_install disabled" || fail "patch: portmaster_install not disabled"
 grep -q "$SD/.userdata/shared/PORTS-portmaster" "$PM/mod_TrimUI.txt" && pass "patch: mod_TrimUI HOME" || fail "patch: mod_TrimUI HOME missing"
+grep -q '^CUR_TTY="/dev/null"' "$PM/mod_TrimUI.txt" && ! grep -q '/dev/fd/1' "$PM/mod_TrimUI.txt" \
+  && pass "patch: mod_TrimUI CUR_TTY no longer reopens the port's log" || fail "patch: mod_TrimUI CUR_TTY still /dev/fd/1"
 grep -q "^export controlfolder=\"$PM\"$" "$PM/control.txt" && pass "patch: control.txt controlfolder" || fail "patch: control.txt controlfolder wrong"
 grep -q 'PM_PORTNAME="${PM_SCRIPTNAME%.sh}"' "$PM/control.txt" && pass "patch: control.txt PM_PORTNAME" || fail "patch: control.txt PM_PORTNAME wrong"
 grep -q 'export GPTOKEYB2="$ESUDO env LD_PRELOAD=$controlfolder/libinterpose.aarch64.so $controlfolder/gptokeyb2 $ESUDOKILL"' "$PM/control.txt" && pass "patch: control.txt GPTOKEYB2" || fail "patch: control.txt GPTOKEYB2 wrong"
@@ -325,6 +327,10 @@ for plat in tg5040 tg5050; do
   printf '# ---- NX Redux: exFAT/FAT32 compat for port scripts ----\n# ---- %s ----\n' "$(cmark $plat)" > "$GPM/control.txt"
   printf 'export DEVICE_CAPABILITIES="x"\n' > "$GPM/device_info.txt"
   [ "$(guard_run $plat)" = 1 ] && pass "guard $plat: stock device_info.txt -> --patch-only" || fail "guard $plat: stock device_info.txt not repaired"
+  printf '# NX Redux: TrimUI capability\nexport DEVICE_CAPABILITIES="x"\n' > "$GPM/device_info.txt"
+  printf 'CUR_TTY="/dev/fd/1"\n' > "$GPM/mod_TrimUI.txt"
+  [ "$(guard_run $plat)" = 1 ] && pass "guard $plat: stock mod_TrimUI.txt CUR_TTY -> --patch-only" || fail "guard $plat: stock mod_TrimUI.txt CUR_TTY not repaired"
+  rm -f "$GPM/mod_TrimUI.txt"
   printf 'GLIBC=2.33\n' > "$GPM/device_info.txt"
   [ "$(guard_run $plat)" = 0 ] && pass "guard $plat: device_info.txt without the probe anchor left alone" || fail "guard $plat: ran on an unpatchable device_info.txt"
   printf 'controlfolder=/roms/ports/PortMaster\n' > "$GPM/control.txt"
@@ -347,7 +353,92 @@ for plat in tg5040 tg5050; do
     && awk '/^cleanup\(\)/,/^}/' "$P" | grep -q 'umount "$NX_ASOUND_DEST"' \
     && pass "ports_launch $plat: .asoundrc bound over /etc/asound.conf for the session, unbound by cleanup" \
     || fail "ports_launch $plat: audio routing bind missing or not cleaned up"
+  grep -q '^export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT' "$P" \
+    && fail "ports_launch $plat: ICU disabled for every port (PortMaster ships ICU in lib/)" || pass "ports_launch $plat: .NET ports keep PortMaster's ICU"
 done
+
+# ---- 11. port_fixes/nextos_sor4.sh pre hook: only NextOS Streets of Rage 4 --
+# loses ICU, and gets the firmware SDL2 in its host_pkg/libs where the firmware
+# keeps it out of /usr/lib. The fix runs sourced, firmware dirs pointed at fixtures.
+for plat in tg5040 tg5050; do
+  P="$ROOT/skeleton/SYSTEM/$plat/paks/Tools/Xtras.pak/catalog/portmaster/pak/ports_launch.sh"
+  FIX="$(dirname "$P")/port_fixes/nextos_sor4.sh"
+  grep -q '^    run_port_fixes pre$' "$P" && pass "ports_launch $plat: main() runs the port fixes' pre hooks" || fail "ports_launch $plat: run_port_fixes pre not called"
+  S="$TMP/sor4-$plat"; mkdir -p "$S/trimui" "$S/usrlib" "$S/ports/sor4/host_pkg/libs" "$S/ports/other"
+  FN="$(sed -e "s|/usr/trimui/lib|$S/trimui|g" -e "s|/usr/lib|$S/usrlib|g" "$FIX")"
+  compat_run() { # $1 = rom script; prints the ICU env the port would get
+    PORTS_DIR="$S/ports" ROM_PATH="$1" bash -c "$FN"$'\n''nextos_sor4_pre; echo "icu=${DOTNET_SYSTEM_GLOBALIZATION_INVARIANT:-}"'
+  }
+  : > "$S/ports/sor4/host_pkg/sor4host"; echo v1 > "$S/trimui/libSDL2-2.0.so.0"
+  printf '"$PKG/sor4host" --starter &\n' > "$S/sor4.sh"; printf 'exec ./game\n' > "$S/other.sh"
+  [ "$(compat_run "$S/other.sh")" = "icu=" ] && [ ! -e "$S/ports/sor4/host_pkg/libs/libSDL2-2.0.so.0" ] \
+    && pass "sor4 compat $plat: other ports untouched" || fail "sor4 compat $plat: touched another port"
+  [ "$(compat_run "$S/sor4.sh")" = "icu=1" ] && pass "sor4 compat $plat: SoR4 runs .NET without ICU" || fail "sor4 compat $plat: ICU not disabled for SoR4"
+  cmp -s "$S/trimui/libSDL2-2.0.so.0" "$S/ports/sor4/host_pkg/libs/libSDL2-2.0.so.0" \
+    && pass "sor4 compat $plat: firmware SDL2 copied into host_pkg/libs" || fail "sor4 compat $plat: SDL2 not copied"
+  echo v2 > "$S/trimui/libSDL2-2.0.so.0"; compat_run "$S/sor4.sh" >/dev/null
+  grep -qx v2 "$S/ports/sor4/host_pkg/libs/libSDL2-2.0.so.0" && pass "sor4 compat $plat: SDL2 copy refreshed" || fail "sor4 compat $plat: stale SDL2 copy kept"
+  rm -f "$S/ports/sor4/host_pkg/libs/libSDL2-2.0.so.0"; echo sys > "$S/usrlib/libSDL2-2.0.so.0"; compat_run "$S/sor4.sh" >/dev/null
+  [ ! -e "$S/ports/sor4/host_pkg/libs/libSDL2-2.0.so.0" ] && pass "sor4 compat $plat: no copy when /usr/lib has SDL2" || fail "sor4 compat $plat: copied although /usr/lib has SDL2"
+done
+
+# ---- 11b. nextos_sor4_retry: the converter's reason-5 rejects copied --------
+# unchanged from the APK into the resumable stage, marked baked, port re-run once.
+for plat in tg5040 tg5050; do
+  P="$ROOT/skeleton/SYSTEM/$plat/paks/Tools/Xtras.pak/catalog/portmaster/pak/ports_launch.sh"
+  grep -q '^    run_port_fixes retry && bash "$ROM_PATH"$' "$P" && pass "ports_launch $plat: port re-run when a retry hook fixed it" || fail "ports_launch $plat: no retry hook re-run"
+  R="$TMP/retry-$plat"; G4="$R/ports/sor4"; mkdir -p "$G4/.setup.stage/gameassets/shader" "$R/apk/assets/shader" "$R/apk/assets/gui/fonts"
+  echo glow > "$R/apk/assets/shader/glow.xnb"; echo font > "$R/apk/assets/gui/fonts/font_50x50.xnb"
+  (cd "$R/apk" && zip -qr "$G4/Streets-of-Rage-4.apk" assets)
+  : > "$G4/.setup.stage/.setup_recipe"; echo done.wem > "$G4/.setup.stage/.bake_progress"
+  printf '%s\n' '[texconv] ERR gui/fonts/font_50x50.xnb: texture conversion failed (reason 5)' \
+    '[texconv] ERR shader/glow.xnb: texture conversion failed (reason 5)' \
+    '[texconv] ERR shader/glow.xnb: texture conversion failed (reason 5)' > "$G4/setup.log"
+  FN="$(cat "$(dirname "$P")/port_fixes/nextos_sor4.sh")"
+  retry_run() { PORTS_DIR="$R/ports" NX_SOR4="$1" bash -c "$FN"$'\n''nextos_sor4_retry' >/dev/null; }
+  retry_run 0 && fail "bake retry $plat: ran for another port" || pass "bake retry $plat: only for SoR4"
+  [ ! -e "$G4/.setup.stage/gameassets/shader/glow.xnb" ] && pass "bake retry $plat: nothing copied for another port" || fail "bake retry $plat: copied for another port"
+  retry_run 1 && pass "bake retry $plat: asks for a re-run" || fail "bake retry $plat: no re-run"
+  grep -qx glow "$G4/.setup.stage/gameassets/shader/glow.xnb" && grep -qx font "$G4/.setup.stage/gameassets/gui/fonts/font_50x50.xnb" \
+    && pass "bake retry $plat: rejected assets copied unchanged from the APK" || fail "bake retry $plat: assets not copied"
+  [ "$(cat "$G4/.setup.stage/.bake_progress")" = "$(printf 'done.wem\ngui/fonts/font_50x50.xnb\nshader/glow.xnb')" ] \
+    && pass "bake retry $plat: each marked baked once" || fail "bake retry $plat: resume list wrong: $(tr '\n' ' ' < "$G4/.setup.stage/.bake_progress")"
+  : > "$G4/.setup.stage/.assets_done"
+  retry_run 1 && fail "bake retry $plat: re-ran after the bake checkpoint" || pass "bake retry $plat: no re-run once assets are done"
+  rm -f "$G4/.setup.stage/.assets_done"; printf '%s\n' '[texconv] ERR shader/missing.xnb: texture conversion failed (reason 5)' > "$G4/setup.log"
+  retry_run 1 && fail "bake retry $plat: re-ran without the asset in the APK" || pass "bake retry $plat: no re-run when an asset is not in the APK"
+  printf '%s\n' '[texconv] ERR ../escape.xnb: texture conversion failed (reason 5)' > "$G4/setup.log"
+  retry_run 1 && fail "bake retry $plat: accepted a path outside the stage" || pass "bake retry $plat: rejects paths outside the stage"
+done
+
+# ---- 11c. run_port_fixes: sources each port_fixes/*.sh, runs its hooks ------
+for plat in tg5040 tg5050; do
+  P="$ROOT/skeleton/SYSTEM/$plat/paks/Tools/Xtras.pak/catalog/portmaster/pak/ports_launch.sh"
+  cmp -s "$(dirname "$P")/port_fixes/nextos_sor4.sh" "$ROOT/skeleton/SYSTEM/tg5040/paks/Tools/Xtras.pak/catalog/portmaster/pak/port_fixes/nextos_sor4.sh" \
+    && pass "port_fixes $plat: same SoR4 fix on both platforms" || fail "port_fixes $plat: SoR4 fix differs between platforms"
+  H="$TMP/hooks-$plat"; mkdir -p "$H/paks/Tools/Xtras.pak/catalog/portmaster/pak/port_fixes"
+  HD="$H/paks/Tools/Xtras.pak/catalog/portmaster/pak/port_fixes"
+  printf 'a_pre() { echo a-pre; A=1; }\na_retry() { echo a-retry; return 1; }\n' > "$HD/a.sh"
+  printf 'b_pre() { echo b-pre; }\nb_retry() { echo b-retry; return 0; }\n' > "$HD/b.sh"
+  printf 'c_pre() { echo c-pre; }\n' > "$HD/c.sh"
+  RPF="$(awk '/^PORT_FIXES_DIR=/,/^}$/' "$P")"
+  OUT="$(SYSTEM_PATH="$H" bash -c "$RPF"$'\n''run_port_fixes pre; echo "A=$A"; run_port_fixes retry && echo rerun')"
+  [ "$OUT" = "$(printf 'a-pre\nb-pre\nc-pre\nA=1\na-retry\nb-retry\nrerun')" ] \
+    && pass "run_port_fixes $plat: pre hooks run in the launcher's shell, any retry hook asks for a re-run" || fail "run_port_fixes $plat: wrong hook run: $(printf '%s' "$OUT" | tr '\n' ' ')"
+  rm -f "$HD/b.sh"
+  OUT="$(SYSTEM_PATH="$H" bash -c "$RPF"$'\n''run_port_fixes pre >/dev/null; run_port_fixes retry >/dev/null && echo rerun || echo none')"
+  [ "$OUT" = none ] && pass "run_port_fixes $plat: no re-run when no retry hook fixed anything" || fail "run_port_fixes $plat: re-ran with nothing fixed"
+  OUT="$(SYSTEM_PATH="$TMP/nowhere" bash -c "$RPF"$'\n''run_port_fixes pre; run_port_fixes retry && echo rerun || echo none')"
+  [ "$OUT" = none ] && pass "run_port_fixes $plat: no port_fixes dir is a no-op" || fail "run_port_fixes $plat: failed without a port_fixes dir"
+done
+
+# ---- 12. PowerVR SDL-context switches also exported by tg5040 ports_launch ---
+P40="$ROOT/skeleton/SYSTEM/tg5040/paks/Tools/Xtras.pak/catalog/portmaster/pak/ports_launch.sh"
+L40C="$(awk '/^export HC_PURE_SDL_CONTEXTS/,/SC_PURE_SDL_CONTEXTS=1$/' "$L40")"
+[ -n "$L40C" ] && [ "$(awk '/^export HC_PURE_SDL_CONTEXTS/,/SC_PURE_SDL_CONTEXTS=1$/' "$P40")" = "$L40C" ] \
+  && pass "ports_launch tg5040: exports the same PURE_SDL_CONTEXTS switches as control.txt" || fail "ports_launch tg5040: PURE_SDL_CONTEXTS switches missing or differ from control.txt"
+grep -q 'PURE_SDL_CONTEXTS' "$ROOT/skeleton/SYSTEM/tg5050/paks/Tools/Xtras.pak/catalog/portmaster/pak/ports_launch.sh" \
+  && fail "tg5050 ports_launch exports PowerVR-only switches" || pass "tg5050 ports_launch leaves the PowerVR switches out"
 
 pkill -f "$BIN/show2.elf" >/dev/null 2>&1
 [ "$FAILS" = 0 ] && say "test-portmaster-launch: OK" || say "test-portmaster-launch: $FAILS FAILURE(S)"

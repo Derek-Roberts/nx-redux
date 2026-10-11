@@ -57,7 +57,8 @@ fi
 PM_TOOL="$SDCARD_PATH/Tools/PortMaster.pak/launch.sh"
 DI="$EMU_DIR/device_info.txt"
 if { { [ -f "$EMU_DIR/control.txt" ] && ! grep -q 'NX Redux: exFAT/FAT32 compat' "$EMU_DIR/control.txt"; } \
-     || { grep -q '^export DEVICE_CAPABILITIES=' "$DI" 2>/dev/null && ! grep -q 'NX Redux: TrimUI capability' "$DI"; }; } \
+     || { grep -q '^export DEVICE_CAPABILITIES=' "$DI" 2>/dev/null && ! grep -q 'NX Redux: TrimUI capability' "$DI"; } \
+     || grep -q '^CUR_TTY="/dev/fd/1"' "$EMU_DIR/mod_TrimUI.txt" 2>/dev/null; } \
     && [ -f "$PM_TOOL" ] && grep -q -- '--patch-only' "$PM_TOOL"; then
     echo "PortMaster files are unpatched: applying the NxRedux patches"
     sh "$PM_TOOL" --patch-only
@@ -171,6 +172,28 @@ add_input_udev_rule() {
     done
 }
 
+# Per-port workarounds live in the system's copy of this catalog,
+# pak/port_fixes/<name>.sh, so a system update refreshes them. Each file
+# defines <name>_pre, run before the port, and may define <name>_retry, run
+# after it: it returns 0 when it repaired a failed run and the port should run
+# once more. Each fix checks for itself whether the launched port is its own.
+PORT_FIXES_DIR="$SYSTEM_PATH/paks/Tools/Xtras.pak/catalog/portmaster/pak/port_fixes"
+run_port_fixes() { # $1 = pre | retry; returns 0 when a retry hook asks for a re-run
+    local f hook rerun=1
+    for f in "$PORT_FIXES_DIR"/*.sh; do
+        [ -f "$f" ] || continue
+        hook="$(basename "$f" .sh)_$1"
+        command -v "$hook" >/dev/null 2>&1 || . "$f"
+        command -v "$hook" >/dev/null 2>&1 || continue
+        if [ "$1" = retry ]; then
+            "$hook" && rerun=0
+        else
+            "$hook"
+        fi
+    done
+    return "$rerun"
+}
+
 main() {
     echo "1" >/tmp/stay_awake
     trap "cleanup" EXIT INT TERM HUP QUIT
@@ -218,6 +241,7 @@ main() {
     set_controller_layout "$NX_BUTTON_LAYOUT"
 
     add_input_udev_rule
+    run_port_fixes pre
 
     # Start power button sleep/poweroff handler
     sleepmon.elf &
@@ -232,6 +256,7 @@ main() {
     SYNC_PID=$!
 
     bash "$ROM_PATH"
+    run_port_fixes retry && bash "$ROM_PATH"
 }
 
 main "$@"

@@ -20,6 +20,14 @@ export LD_LIBRARY_PATH="$EMU_DIR/lib/compat:$EMU_DIR/lib:/usr/trimui/lib:$LD_LIB
 export SSL_CERT_FILE="$EMU_DIR/ssl/certs/ca-certificates.crt"
 export SDL_GAMECONTROLLERCONFIG_FILE="$EMU_DIR/gamecontrollerdb.txt"
 export PYSDL2_DLL_PATH="/usr/trimui/lib"
+# The NextOS Unity loaders' switches that keep GL contexts SDL-owned on the
+# PowerVR GPU (control.txt's "PowerVR SDL contexts" block explains them), also
+# exported here: wrappers that never source control.txt (Prizefighters 2's
+# pf2-nextos.sh resets controlfolder to a path it cannot find) missed them.
+export HC_PURE_SDL_CONTEXTS=1 HD_PURE_SDL_CONTEXTS=1 BC_PURE_SDL_CONTEXTS=1 \
+  FP2_PURE_SDL_CONTEXTS=1 PF2_PURE_SDL_CONTEXTS=1 HGO_PURE_SDL_CONTEXTS=1 \
+  ST_PURE_SDL_CONTEXTS=1 SF_PURE_SDL_CONTEXTS=1 SC_PURE_SDL_CONTEXTS=1
+
 export HOME="$SHARED_USERDATA_PATH/PORTS-portmaster"
 # Copy audio config so ALSA finds Bluetooth/USB DAC routing (audiomon writes to USERDATA_PATH)
 [ -f "$USERDATA_PATH/.asoundrc" ] && cp "$USERDATA_PATH/.asoundrc" "$HOME/.asoundrc"
@@ -48,7 +56,8 @@ fi
 PM_TOOL="$SDCARD_PATH/Tools/PortMaster.pak/launch.sh"
 DI="$EMU_DIR/device_info.txt"
 if { { [ -f "$EMU_DIR/control.txt" ] && ! grep -q 'NX Redux: PowerVR SDL contexts' "$EMU_DIR/control.txt"; } \
-     || { grep -q '^export DEVICE_CAPABILITIES=' "$DI" 2>/dev/null && ! grep -q 'NX Redux: TrimUI capability' "$DI"; }; } \
+     || { grep -q '^export DEVICE_CAPABILITIES=' "$DI" 2>/dev/null && ! grep -q 'NX Redux: TrimUI capability' "$DI"; } \
+     || grep -q '^CUR_TTY="/dev/fd/1"' "$EMU_DIR/mod_TrimUI.txt" 2>/dev/null; } \
     && [ -f "$PM_TOOL" ] && grep -q -- '--patch-only' "$PM_TOOL"; then
     echo "PortMaster files are unpatched: applying the NxRedux patches"
     sh "$PM_TOOL" --patch-only
@@ -162,6 +171,28 @@ add_input_udev_rule() {
     done
 }
 
+# Per-port workarounds live in the system's copy of this catalog,
+# pak/port_fixes/<name>.sh, so a system update refreshes them. Each file
+# defines <name>_pre, run before the port, and may define <name>_retry, run
+# after it: it returns 0 when it repaired a failed run and the port should run
+# once more. Each fix checks for itself whether the launched port is its own.
+PORT_FIXES_DIR="$SYSTEM_PATH/paks/Tools/Xtras.pak/catalog/portmaster/pak/port_fixes"
+run_port_fixes() { # $1 = pre | retry; returns 0 when a retry hook asks for a re-run
+    local f hook rerun=1
+    for f in "$PORT_FIXES_DIR"/*.sh; do
+        [ -f "$f" ] || continue
+        hook="$(basename "$f" .sh)_$1"
+        command -v "$hook" >/dev/null 2>&1 || . "$f"
+        command -v "$hook" >/dev/null 2>&1 || continue
+        if [ "$1" = retry ]; then
+            "$hook" && rerun=0
+        else
+            "$hook"
+        fi
+    done
+    return "$rerun"
+}
+
 main() {
     echo "1" >/tmp/stay_awake
     trap "cleanup" EXIT INT TERM HUP QUIT
@@ -204,6 +235,7 @@ main() {
     set_controller_layout "$NX_BUTTON_LAYOUT"
 
     add_input_udev_rule
+    run_port_fixes pre
 
     # Start power button sleep/poweroff handler
     sleepmon.elf &
@@ -211,6 +243,7 @@ main() {
     echo "Starting port: $ROM_PATH"
     cd "$ROM_DIR"
     bash "$ROM_PATH"
+    run_port_fixes retry && bash "$ROM_PATH"
 }
 
 main "$@"

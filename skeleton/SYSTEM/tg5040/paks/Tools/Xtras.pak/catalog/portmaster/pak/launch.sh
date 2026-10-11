@@ -276,9 +276,15 @@ patch_platform_py() {
     rm -rf "$PM_DIR/pylibs/harbourmaster/__pycache__"
 }
 
+# Upstream sets CUR_TTY="/dev/fd/1" (the port's stdout). Port scripts write
+# messages with `> "$CUR_TTY"` after `exec > "$GAMEDIR/log.txt"`, and reopening
+# /dev/fd/1 with > truncates that log: the port wiped its own error output
+# (NextOS Streets of Rage 4, Castle of Illusion, Geometry Dash). /dev/null
+# loses only those console messages.
 patch_mod_trimui() {
     [ -f "$PM_DIR/mod_TrimUI.txt" ] || return 0
-    sed -i "s|/mnt/SDCARD/Data/home|$SHARED_USERDATA_PATH/PORTS-portmaster|g" "$PM_DIR/mod_TrimUI.txt"
+    sed -i -e "s|/mnt/SDCARD/Data/home|$SHARED_USERDATA_PATH/PORTS-portmaster|g" \
+        -e 's|^CUR_TTY="/dev/fd/1"$|CUR_TTY="/dev/null"  # NX Redux: no log truncation|' "$PM_DIR/mod_TrimUI.txt"
 }
 
 # PortMaster 2026.09.19+ rewrote device_info.txt's host probe and dropped the

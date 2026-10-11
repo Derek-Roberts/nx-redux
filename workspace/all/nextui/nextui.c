@@ -199,8 +199,11 @@ int main(int argc, char* argv[]) {
 	// launch. Stale = a previous launch never consumed it.
 	unlink(NETPLAY_LAUNCH_PATH);
 
-	if (autoResume())
+	if (autoResume()) {
+		// a Launch Options request left behind must not fire after the resumed game
+		unlink(PENDING_LAUNCH_PATH);
 		return 0; // nothing to do
+	}
 
 	// Lift the CPU cap before InitSettings, not just inside GFX_init: on tg5050
 	// the settings library alone is ~0.45s of the ~1s start-to-first-frame.
@@ -233,6 +236,15 @@ int main(int argc, char* argv[]) {
 	HomeStats_init();
 	CollCount_init();
 	Menu_init();
+	// Launch Options' Launch: the pak script left a ROM to start. This needs Menu_init (Recents, the tabs and
+	// loadLast's restored list, which Entry_open uses to save the return position) but nothing after it, so
+	// leave right here, the way the main loop's exit leaves for a launch: no Home_reset (it would queue worker
+	// jobs for a menu never shown), no game switcher, no first frame, and above all no backgrounded
+	// "gametimectl.elf stop_all", which could land after openRom's "start" and drop this game's play time.
+	if (pendingLaunch()) {
+		GFX_quit();
+		_exit(0);
+	}
 	Home_reset(); // Continue and the pins for this menu show (nextui restarts after every game); the stats are
 				  // requested when Home is first shown
 	bootStamp("after menu init");

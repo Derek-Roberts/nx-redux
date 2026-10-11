@@ -1,7 +1,7 @@
 PortMaster runtime (third-party programs, libraries, Python packages, fonts and data bundled with the PortMaster pak)
 Source: https://github.com/ben16w/minui-portmaster (files/bin.tar.gz, files/lib.tar.gz, PortMaster pylibs), https://github.com/PortsMaster/PortMaster-GUI (pylibs, runtimes), https://github.com/binarycounter/Westonpack (weston_pkg); per-component upstreams in the table
 Version: per component (see table; versions from file names and embedded version strings)
-Shipped as: Emus/shared/PortMaster/files/bin.zip, lib.zip, libs.zip (weston_pkg_0.2.squashfs), pylibs.zip, gamecontrollerdb_*.txt, ca-certificates.crt, progressor, disable_python_function.py (card root; from skeleton/BASE/Emus/shared/PortMaster/files/)
+Shipped as: Emus/shared/PortMaster/files/bin.zip, lib.zip, libs.zip (weston_pkg_0.2.squashfs), pylibs.zip, gamecontrollerdb_*.txt, ca-certificates.crt, disable_python_function.py (card root; from skeleton/BASE/Emus/shared/PortMaster/files/)
 License: mixed (GPL-2.0, GPL-3.0, LGPL-2.0/2.1/3.0, MIT, BSD-2/3-Clause, ISC, Zlib, Apache-2.0, PSF-2.0, MPL-2.0, BSL-1.0, ICU, OpenSSL, FTL, IJG, libpng-2.0, Info-ZIP, OFL-1.1, Bitstream-Vera, public domain, and PROPRIETARY vendor GPU blobs); see table and texts below
 
 IMPORTANT NOTES (found while auditing)
@@ -171,7 +171,7 @@ typing_extensions | unknown | exlibs/typing_extensions.py (+ LICENSE-typing_exte
 == top-level files ==
 gamecontrollerdb_*.txt | unknown | gamecontrollerdb_nintendo.txt, gamecontrollerdb_xbox.txt | Zlib | https://github.com/gabomdq/SDL_GameControllerDB | see licenses/sdl-gamecontrollerdb.txt
 ca-certificates.crt (Mozilla CA bundle) | unknown | ca-certificates.crt | MPL-2.0 (Mozilla CA certificate data) | https://curl.se/docs/caextract.html | Mozilla Foundation (see licenses/ca-certificates.txt)
-progressor, disable_python_function.py | unknown | progressor, disable_python_function.py | MIT (minui-portmaster) | https://github.com/ben16w/minui-portmaster | Copyright (c) 2025 Ben Wadsworth
+disable_python_function.py | unknown | disable_python_function.py | MIT (minui-portmaster) | https://github.com/ben16w/minui-portmaster | Copyright (c) 2025 Ben Wadsworth
 
 LICENSE TEXTS
 -------------

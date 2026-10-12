@@ -1694,6 +1694,13 @@ void GameList_runContextAction(int id) {
 	case 34: // Add to Collection
 		ctxAddToCollection(entry, root_sel, sel);
 		break;
+	case 39: // Resume (offered while button hints are hidden), as X
+		readyResume(entry);
+		if (entry && resume.can_resume) {
+			resume.should_resume = true;
+			Entry_open(entry);
+		}
+		break;
 	case 35: // Launch with Netplay
 		ctxNetplay(entry, from_home);
 		break;
@@ -1791,6 +1798,19 @@ static void addItem(ContextMenuItem* items, int* idx, const char* label, int id)
 
 // A game's items, as in a ROM listing. allow_pin false leaves out Pin/Unpin Item.
 static void romItems(Entry* entry, bool allow_pin, ContextMenuItem* items, int* idx) {
+	char label[CONTEXTMENU_MAX_TEXT];
+	// Button hints hidden (Layouts > Button hints): the bar's game actions move here, with their button. Not A/B, and
+	// not Resume on Home (its A already resumes). Netplay regardless of Appearance > Show netplay hint.
+	if (!CFG_getButtonHints()) {
+		if (!Home_active() && resume.can_resume) { // the selected row's, as the X handler reads it
+			snprintf(label, sizeof(label), "Resume (%s)", PAD_buttonLabel("X"));
+			addItem(items, idx, label, 39);
+		}
+		if (entryNetplayCapable(entry)) {
+			snprintf(label, sizeof(label), "Netplay (%s)", PAD_buttonLabel("Y"));
+			addItem(items, idx, label, 35);
+		}
+	}
 	if (allow_pin && canPinEntry(entry)) {
 		if (Shortcuts_exists(entry->path + strlen(SDCARD_PATH)))
 			addItem(items, idx, "Unpin Item", 31);
@@ -1802,9 +1822,6 @@ static void romItems(Entry* entry, bool allow_pin, ContextMenuItem* items, int* 
 		addItem(items, idx, "Delete Rom", 32);
 		addItem(items, idx, "Rename Rom", 33);
 		addItem(items, idx, "Add to Collection", 34);
-		// Netplay launch lives on the Y button (with its own hint), so it
-		// intentionally has no context-menu entry; case 35 stays as the
-		// shared launch path the Y handler documents.
 		if (entryEmuOptionsCapable(entry))
 			addItem(items, idx, "Emulator Options", 36);
 		if (entryLaunchOptionsCapable(entry))

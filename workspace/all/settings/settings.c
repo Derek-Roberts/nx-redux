@@ -1479,7 +1479,7 @@ static void init_about_info(void) {
 // ============================================
 
 #define MAX_APPEARANCE_ITEMS 28
-#define MAX_LAYOUTS_ITEMS 24
+#define MAX_LAYOUTS_ITEMS 28
 #define MAX_DISPLAY_ITEMS 8
 #define MAX_SYSTEM_ITEMS 24
 #define MAX_FN_ITEMS 20
@@ -1836,7 +1836,8 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	// ============================
 	idx = 0;
 	// Grouped by what they shape: each tab's show row, then its layout, orientation and controller rows (shown only
-	// while the tab is, sync_layouts_rows), then the game lists' rows, then the rows for everything.
+	// while the tab is, sync_layouts_rows), then the game lists' rows, then the rows for everything, then the boot view
+	// and the Game Switcher.
 #define LAYOUTS_CYCLE_ROW(_label, _desc, _labels, _count, _values, _get, _set, _reset)                 \
 	do {                                                                                               \
 		layouts_items[idx] =                                                                           \
@@ -1931,6 +1932,14 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	LAYOUTS_CYCLE_ROW(
 		"Button hints", "Hidden, List game lists show play time and achievements.",
 		hide_show_labels, 2, on_off_values, get_button_hints, set_button_hints, reset_button_hints);
+	LAYOUTS_CYCLE_ROW(
+		"Default view", "The initial view to show on boot",
+		default_view_labels, DEFAULT_VIEW_COUNT, default_view_values, get_default_view, set_default_view,
+		reset_default_view);
+	LAYOUTS_CYCLE_ROW(
+		"Game Switcher games", "Which recently played games appear in the Game Switcher.",
+		switcher_games_labels, SWITCHER_GAMES_COUNT, switcher_games_values, get_switcher_resumable_only,
+		set_switcher_resumable_only, reset_switcher_resumable_only);
 #undef LAYOUTS_CYCLE_ROW
 	sync_layouts_rows();
 	layouts_items[idx++] = (SettingItem)ITEM_BUTTON_INIT(
@@ -1973,6 +1982,12 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	appearance_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
 		"Show battery percentage", "Show battery level as percent in the status pill",
 		on_off_labels, 2, on_off_values, get_show_battery_percent, set_show_battery_percent, reset_show_battery_percent);
+	appearance_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
+		"Show clock", "Show clock in the status pill",
+		on_off_labels, 2, on_off_values, get_show_clock, set_show_clock, reset_show_clock);
+	appearance_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
+		"Show 24h time format", "Show clock in the 24hrs time format",
+		on_off_labels, 2, on_off_values, get_clock24h, set_clock24h, reset_clock24h);
 	appearance_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
 		"Show search hint", "Show the START search button hint on the main menu",
 		on_off_labels, 2, on_off_values, get_show_search_hint, set_show_search_hint, reset_show_search_hint);
@@ -2058,18 +2073,6 @@ static void build_menu_tree(const DeviceInfo* dev) {
 		"Hint labels", "What the A/B/X/Y hints show when Xbox layout is on. Applies as soon as you leave Settings",
 		hint_labels_labels, 2, hint_labels_values, get_hint_labels, set_hint_labels, reset_hint_labels);
 	sync_hint_labels_visibility();
-	system_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-		"Default view", "The initial view to show on boot",
-		default_view_labels, DEFAULT_VIEW_COUNT, default_view_values, get_default_view, set_default_view, reset_default_view);
-	system_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-		"Game Switcher games", "Which recently played games appear in the Game Switcher.",
-		switcher_games_labels, SWITCHER_GAMES_COUNT, switcher_games_values, get_switcher_resumable_only, set_switcher_resumable_only, reset_switcher_resumable_only);
-	system_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-		"Show 24h time format", "Show clock in the 24hrs time format",
-		on_off_labels, 2, on_off_values, get_clock24h, set_clock24h, reset_clock24h);
-	system_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-		"Show clock", "Show clock in the status pill",
-		on_off_labels, 2, on_off_values, get_show_clock, set_show_clock, reset_show_clock);
 	system_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
 		"Set time and date automatically", "Sync time via NTP (requires internet)",
 		on_off_labels, 2, on_off_values, get_ntp, set_ntp, reset_ntp);
@@ -2280,7 +2283,7 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
 		"Appearance", "UI customization", &appearance_page);
 	main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
-		"Layouts", "Menu styles, tabs and button hints", &layouts_page);
+		"Layouts", "Menu styles, tabs, hints and boot view", &layouts_page);
 	main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
 		"In-game Notifications", "Save state notifications", &notify_page);
 

@@ -6,6 +6,7 @@
  */
 
 #include "msettings.h"
+#include "emu_shortcuts.h"
 #include "vib_levels.h"
 #include "defines.h"
 #include "api.h"
@@ -109,10 +110,6 @@ static int has_stock_osd_restore(const DeviceInfo* dev) {
 
 static int has_fn_switch(const DeviceInfo* dev) {
 	return dev->platform == PLAT_TG5050 || dev->platform == PLAT_TG5040;
-}
-
-static int has_analog_sticks(const DeviceInfo* dev) {
-	return dev->model == MODEL_SMARTPRO || dev->model == MODEL_SMARTPROS || dev->model == MODEL_BRICKPRO;
 }
 
 // Dedicated physical F1/F2 keys, usable as menu-level shortcuts (the Smart
@@ -320,11 +317,6 @@ static const char* hint_labels_labels[] = {"Layout letters", "Printed caps"};
 static int hint_labels_values[] = {0, 1};
 // The "Hint labels" row only matters under the Xbox layout; hidden otherwise.
 static SettingItem* hint_labels_item = NULL;
-
-/* Dpad mode: Dpad, Joystick, Both */
-static const char* dpad_mode_labels[] = {"Dpad", "Joystick", "Both"};
-static int dpad_mode_values[] = {0, 1, 2};
-#define DPAD_MODE_COUNT 3
 
 // ============================================
 // FN Switch "when FN is on" arrays
@@ -1232,104 +1224,6 @@ static void reset_fn_exposure(void) {
 	SetFnExposure(SETTINGS_DEFAULT_FN_NO_CHANGE);
 }
 
-/* Turbo buttons */
-static int get_turbo_a(void) {
-	return GetFnTurboA();
-}
-static void set_turbo_a(int v) {
-	SetFnTurboA(v);
-}
-static void reset_turbo_a(void) {
-	SetFnTurboA(0);
-}
-
-static int get_turbo_b(void) {
-	return GetFnTurboB();
-}
-static void set_turbo_b(int v) {
-	SetFnTurboB(v);
-}
-static void reset_turbo_b(void) {
-	SetFnTurboB(0);
-}
-
-static int get_turbo_x(void) {
-	return GetFnTurboX();
-}
-static void set_turbo_x(int v) {
-	SetFnTurboX(v);
-}
-static void reset_turbo_x(void) {
-	SetFnTurboX(0);
-}
-
-static int get_turbo_y(void) {
-	return GetFnTurboY();
-}
-static void set_turbo_y(int v) {
-	SetFnTurboY(v);
-}
-static void reset_turbo_y(void) {
-	SetFnTurboY(0);
-}
-
-static int get_turbo_l1(void) {
-	return GetFnTurboL1();
-}
-static void set_turbo_l1(int v) {
-	SetFnTurboL1(v);
-}
-static void reset_turbo_l1(void) {
-	SetFnTurboL1(0);
-}
-
-static int get_turbo_l2(void) {
-	return GetFnTurboL2();
-}
-static void set_turbo_l2(int v) {
-	SetFnTurboL2(v);
-}
-static void reset_turbo_l2(void) {
-	SetFnTurboL2(0);
-}
-
-static int get_turbo_r1(void) {
-	return GetFnTurboR1();
-}
-static void set_turbo_r1(int v) {
-	SetFnTurboR1(v);
-}
-static void reset_turbo_r1(void) {
-	SetFnTurboR1(0);
-}
-
-static int get_turbo_r2(void) {
-	return GetFnTurboR2();
-}
-static void set_turbo_r2(int v) {
-	SetFnTurboR2(v);
-}
-static void reset_turbo_r2(void) {
-	SetFnTurboR2(0);
-}
-
-/* Dpad mode when FN is on */
-static int get_fn_dpad_mode(void) {
-	if (!GetFnDpadDisabled() && !GetFnDpadJoystick())
-		return 0;
-	if (GetFnDpadDisabled() && GetFnDpadJoystick())
-		return 1;
-	return 2;
-}
-static void set_fn_dpad_mode(int val) {
-	SetFnDpadDisabled(val == 1);
-	SetFnDpadJoystick(val > 0);
-}
-static void reset_fn_dpad_mode(void) {
-	SetFnDpadDisabled(0);
-	SetFnDpadJoystick(0);
-}
-
 // ============================================
 // Notification callbacks
 // ============================================
@@ -1500,7 +1394,8 @@ static void init_about_info(void) {
 #define MAX_NOTIFY_ITEMS 8
 #define MAX_ABOUT_ITEMS 8
 #define MAX_SIMPLE_MODE_ITEMS 2
-#define MAX_MAIN_ITEMS 16
+#define MAX_SHORTCUT_ITEMS (SHORTCUT_COUNT + 1)
+#define MAX_MAIN_ITEMS 18
 
 static SettingItem appearance_items[MAX_APPEARANCE_ITEMS];
 static SettingItem layouts_items[MAX_LAYOUTS_ITEMS];
@@ -1508,6 +1403,7 @@ static SettingItem display_items[MAX_DISPLAY_ITEMS];
 static SettingItem system_items[MAX_SYSTEM_ITEMS];
 static SettingItem fn_items[MAX_FN_ITEMS];
 static SettingItem fnkey_items[MAX_FNKEY_ITEMS];
+static SettingItem shortcut_items[MAX_SHORTCUT_ITEMS];
 static SettingItem notify_items[MAX_NOTIFY_ITEMS];
 static SettingItem about_items[MAX_ABOUT_ITEMS];
 static SettingItem simple_mode_items[MAX_SIMPLE_MODE_ITEMS];
@@ -1520,6 +1416,7 @@ static SettingsPage system_page;
 static SettingsPage fn_page;
 static SettingsPage fn_switch_page; /* wraps fn_items into "FN Switch" titled page */
 static SettingsPage fn_keys_page;
+static SettingsPage shortcuts_page;
 static SettingsPage notify_page;
 static SettingsPage about_page;
 static SettingsPage simple_mode_page;
@@ -1580,6 +1477,131 @@ static void show_simple_mode_help(void) {
 	}
 	PAD_poll();
 	PAD_reset(); // don't leak the close press to the menu underneath
+}
+
+// ============================================
+// Emulator shortcut callbacks
+// ============================================
+
+// minarch reads these at every game launch (common/emu_shortcuts.h); every
+// change is written straight away.
+static int shortcut_labels[SHORTCUT_COUNT];
+static char shortcuts_path[MAX_PATH];
+
+#define SHORTCUT_CAPTURE_MS 5000
+
+static void shortcuts_load(void) {
+	EmuShortcuts_getPath(shortcuts_path, sizeof(shortcuts_path), USERDATA_PATH, getenv("DEVICE"));
+	EmuShortcuts_read(shortcuts_path, shortcut_labels);
+}
+static void shortcuts_save(void) {
+	if (!EmuShortcuts_write(shortcuts_path, shortcut_labels))
+		LOG_error("Failed to write %s\n", shortcuts_path);
+}
+static int shortcut_get(int id) {
+	return shortcut_labels[id];
+}
+static void shortcut_set(int id, int label) {
+	if (label < 0 || label >= SHORTCUT_LABEL_COUNT)
+		label = 0;
+	if (EmuShortcuts_isReserved(label)) // LEFT/RIGHT step past it the way they came
+		label = (label > shortcut_labels[id] ? label + 1 : label - 1 + SHORTCUT_LABEL_COUNT) % SHORTCUT_LABEL_COUNT;
+	if (shortcut_labels[id] == label)
+		return;
+	shortcut_labels[id] = label;
+	shortcuts_save();
+}
+
+// Blocking "press a button" capture, like minarch's in-game binder: the first
+// button pressed (UP..R4) is bound, as MENU+button when MENU is held. B on its
+// own, or SHORTCUT_CAPTURE_MS without a press, cancels.
+static void shortcut_capture(int id) {
+	if (!g_screen)
+		return;
+
+	// holding MENU for a combo outlasts keymon's long press; keep the OSD down
+	touch(OSD_SUPPRESS_PATH);
+	PAD_reset(); // the A that opened the capture is still down
+	uint32_t start = SDL_GetTicks();
+	int label = -1;
+	int reserved = 0; // MENU+SELECT was pressed: say why it didn't bind and keep waiting
+	while (!app_quit) {
+		GFX_startFrame();
+		PAD_poll();
+
+		int menu = PAD_isPressed(BTN_MENU);
+		if (PAD_justPressed(BTN_B) && !menu)
+			break;
+		for (int btn_id = 0; btn_id < SHORTCUT_BUTTON_COUNT; btn_id++) {
+			if (PAD_justPressed(1 << btn_id)) {
+				label = EmuShortcuts_toLabel(btn_id, menu);
+				break;
+			}
+		}
+		if (EmuShortcuts_isReserved(label)) {
+			label = -1;
+			reserved = 1;
+			start = SDL_GetTicks(); // a fresh countdown for the next try
+		}
+		if (label >= 0)
+			break;
+
+		uint32_t elapsed = SDL_GetTicks() - start;
+		if (elapsed >= SHORTCUT_CAPTURE_MS)
+			break;
+
+		char text[256];
+		snprintf(text, sizeof(text),
+				 "%s\n\n%s\n\n%u",
+				 shortcut_names[id],
+				 reserved ? "MENU+SELECT opens the Game Switcher.\nPress another button."
+						  : "Press a button, or hold MENU\nand press a button.",
+				 (unsigned)((SHORTCUT_CAPTURE_MS - elapsed + 999) / 1000));
+		GFX_clear(g_screen);
+		UI_renderMenuBar(g_screen, "Settings | Emulator Shortcuts");
+		GFX_blitMessage(font.small, text, g_screen,
+						&(SDL_Rect){SCALE1(PADDING), 0,
+									g_screen->w - SCALE1(PADDING * 2), g_screen->h});
+		UI_renderButtonHintBar(g_screen, (char*[]){"B", "CANCEL", NULL});
+		GFX_flip(g_screen);
+	}
+	unlink(OSD_SUPPRESS_PATH);
+	PAD_poll();
+	PAD_reset(); // don't leak the bound press to the menu underneath
+
+	if (label >= 0)
+		shortcut_set(id, label);
+}
+
+// one get/set/clear/capture set per shortcut (the menu callbacks take no argument)
+#define SHORTCUT_CALLBACKS_(id, name)         \
+	static int get_shortcut_##id(void) {      \
+		return shortcut_get(SHORTCUT_##id);   \
+	}                                         \
+	static void set_shortcut_##id(int v) {    \
+		shortcut_set(SHORTCUT_##id, v);       \
+	}                                         \
+	static void clear_shortcut_##id(void) {   \
+		shortcut_set(SHORTCUT_##id, 0);       \
+	}                                         \
+	static void capture_shortcut_##id(void) { \
+		shortcut_capture(SHORTCUT_##id);      \
+	}
+SHORTCUT_LIST(SHORTCUT_CALLBACKS_)
+#undef SHORTCUT_CALLBACKS_
+
+typedef struct ShortcutRow {
+	int (*get)(void);
+	void (*set)(int);
+	void (*clear)(void);
+	void (*capture)(void);
+} ShortcutRow;
+#define SHORTCUT_ROW_(id, name) [SHORTCUT_##id] = {get_shortcut_##id, set_shortcut_##id, clear_shortcut_##id, capture_shortcut_##id},
+static const ShortcutRow shortcut_rows[SHORTCUT_COUNT] = {SHORTCUT_LIST(SHORTCUT_ROW_)};
+#undef SHORTCUT_ROW_
+
+static int is_turbo_shortcut(int id) {
+	return id >= SHORTCUT_TOGGLE_TURBO_A && id <= SHORTCUT_TOGGLE_TURBO_R2;
 }
 
 // ============================================
@@ -1767,6 +1789,13 @@ static void reset_system_page(void) {
 }
 static void reset_fn_page(void) {
 	settings_page_reset_all(&fn_switch_page);
+}
+static void reset_shortcuts_page(void) {
+	for (int i = 0; i < SHORTCUT_COUNT; i++)
+		shortcut_labels[i] = 0;
+	shortcuts_save(); // one write, not one per row
+	for (int i = 0; i < shortcuts_page.item_count; i++)
+		settings_item_sync(&shortcuts_page.items[i]);
 }
 static void reset_notify_page(void) {
 	settings_page_reset_all(&notify_page);
@@ -2176,38 +2205,6 @@ static void build_menu_tree(const DeviceInfo* dev) {
 				"Exposure when FN is on", "Exposure enhancement (-4 to 5)",
 				fn_exposure_labels, FN_EXPOSURE_COUNT, fn_exposure_values, get_fn_exposure, set_fn_exposure, reset_fn_exposure);
 		}
-
-		/* Turbo buttons */
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire A", "Enable turbo fire A",
-			on_off_labels, 2, on_off_values, get_turbo_a, set_turbo_a, reset_turbo_a);
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire B", "Enable turbo fire B",
-			on_off_labels, 2, on_off_values, get_turbo_b, set_turbo_b, reset_turbo_b);
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire X", "Enable turbo fire X",
-			on_off_labels, 2, on_off_values, get_turbo_x, set_turbo_x, reset_turbo_x);
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire Y", "Enable turbo fire Y",
-			on_off_labels, 2, on_off_values, get_turbo_y, set_turbo_y, reset_turbo_y);
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire L1", "Enable turbo fire L1",
-			on_off_labels, 2, on_off_values, get_turbo_l1, set_turbo_l1, reset_turbo_l1);
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire L2", "Enable turbo fire L2",
-			on_off_labels, 2, on_off_values, get_turbo_l2, set_turbo_l2, reset_turbo_l2);
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire R1", "Enable turbo fire R1",
-			on_off_labels, 2, on_off_values, get_turbo_r1, set_turbo_r1, reset_turbo_r1);
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Turbo fire R2", "Enable turbo fire R2",
-			on_off_labels, 2, on_off_values, get_turbo_r2, set_turbo_r2, reset_turbo_r2);
-	}
-
-	if (has_fn_switch(dev) && !has_analog_sticks(dev)) {
-		fn_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(
-			"Dpad mode when FN is on", "Dpad: default. Joystick: Dpad exclusively acts as analog stick.\nBoth: Dpad and Joystick inputs at the same time.",
-			dpad_mode_labels, DPAD_MODE_COUNT, dpad_mode_values, get_fn_dpad_mode, set_fn_dpad_mode, reset_fn_dpad_mode);
 	}
 
 	fn_items[idx++] = (SettingItem)ITEM_BUTTON_INIT(
@@ -2230,6 +2227,30 @@ static void build_menu_tree(const DeviceInfo* dev) {
 		"Reset to defaults", "Resets all options in this menu to their default values.",
 		reset_fn_keys_page);
 	init_page(&fn_keys_page, "Settings | F1 / F2 Keys", fnkey_items, idx, 0);
+
+	// ============================
+	// Emulator shortcuts page (global, read by minarch at every launch)
+	// ============================
+	idx = 0;
+	shortcuts_load();
+	for (int i = 0; i < SHORTCUT_COUNT; i++) {
+		if (is_turbo_shortcut(i) && !PLAT_canTurbo())
+			continue;
+		const ShortcutRow* row = &shortcut_rows[i];
+		const char* desc = i == SHORTCUT_TOGGLE_DPAD_JOYSTICK
+							   ? "D-pad moves the left stick until pressed again.\nA: press the button (or MENU+button) to use. X: clear."
+							   : "In-game shortcut for every console.\nA: press the button (or MENU+button) to use. X: clear.";
+		shortcut_items[idx] = (SettingItem)ITEM_CYCLE_INIT(
+			shortcut_names[i], desc,
+			(const char**)button_labels, SHORTCUT_LABEL_COUNT, NULL, row->get, row->set, row->clear);
+		shortcut_items[idx].on_press = row->capture;
+		shortcut_items[idx].on_clear = row->clear;
+		idx++;
+	}
+	shortcut_items[idx++] = (SettingItem)ITEM_BUTTON_INIT(
+		"Reset to defaults", "Clears every shortcut.",
+		reset_shortcuts_page);
+	init_page(&shortcuts_page, "Settings | Emulator Shortcuts", shortcut_items, idx, 0);
 
 	// ============================
 	// Notifications page
@@ -2347,6 +2368,9 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	}
 
 	main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
+		"Emulator Shortcuts", "In-game shortcuts for every console", &shortcuts_page);
+
+	main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
 		"Simple Mode", "Simplified menu for children", &simple_mode_page);
 
 	main_items[idx++] = (SettingItem)ITEM_SUBMENU_INIT(
@@ -2373,7 +2397,7 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	{
 		SettingsPage* pages[] = {
 			&appearance_page, &layouts_page, &display_page, &system_page,
-			&fn_switch_page, &notify_page, &simple_mode_page, NULL};
+			&fn_switch_page, &notify_page, &simple_mode_page, &shortcuts_page, NULL};
 		for (int p = 0; pages[p]; p++) {
 			for (int i = 0; i < pages[p]->item_count; i++) {
 				settings_item_sync(&pages[p]->items[i]);

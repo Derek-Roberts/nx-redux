@@ -233,3 +233,16 @@ N64_OLD="$SDCARD_PATH/Emus/shared/mupen64plus"
 true
 # --- n64-standalone-cleanup-end
 
+
+# --------------------------------------
+# --- ra-shared-cache-begin
+# RetroAchievements badges are now kept per game
+# (.userdata/shared/.ra/cache/badges/<game id>/). The old flat folder (tens of
+# thousands of files) and its per-game "all cached" markers are deleted
+# rather than regrouped: badges download again per game on an online launch
+# or with the RetroAchievements pak's Download. Game data (.ra/cache/games)
+# and pending offline unlocks (.ra/pending) are never touched.
+# One-shot per update, harmless if repeated; must never fail the update.
+rm -rf "$SDCARD_PATH/.userdata/shared/.ra/badges" "$SDCARD_PATH/.userdata/shared/.ra/badge_sets" 2>/dev/null
+true
+# --- ra-shared-cache-end

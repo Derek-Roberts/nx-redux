@@ -194,9 +194,8 @@ static int rat_game_cmp(const void* a, const void* b) {
 
 int RAT_listGames(RAT_Game** out_games) {
 	*out_games = NULL;
-	char games_dir[512];
-	snprintf(games_dir, sizeof(games_dir), "%s/.ra/cache/games", SHARED_USERDATA_PATH);
-	DIR* d = opendir(games_dir);
+	const char* games_dir = RA_Offline_gamesDir();
+	DIR* d = games_dir ? opendir(games_dir) : NULL;
 	if (!d)
 		return 0;
 
@@ -229,6 +228,7 @@ int RAT_listGames(RAT_Game** out_games) {
 		RAT_Game* g = &games[count];
 		memset(g, 0, sizeof(*g));
 		snprintf(g->hash, sizeof(g->hash), "%s", ent->d_name);
+		g->game_id = sets.id;
 		g->session_game_id = sets.session_game_id;
 		snprintf(g->title, sizeof(g->title), "%s", sets.title ? sets.title : "(unknown)");
 
@@ -396,6 +396,7 @@ bool RAT_progressForHash(const char* hash, int* unlocked, int* total, char* next
 	RAT_Game game;
 	memset(&game, 0, sizeof(game));
 	snprintf(game.hash, sizeof(game.hash), "%s", hash);
+	game.game_id = sets.id;
 	game.session_game_id = sets.session_game_id;
 	rc_api_destroy_fetch_game_sets_response(&sets);
 
@@ -570,9 +571,8 @@ static int rat_unlock_key_cmp(const void* a, const void* b) {
 // (session game, achievement) keys, so the discs of one game (RAT_listGames merges them) count once.
 // Reads and parses every cached game: call it from a worker thread only.
 int RAT_unlocksSinceCancellable(time_t since, bool (*cancelled)(void)) {
-	char games_dir[512];
-	snprintf(games_dir, sizeof(games_dir), "%s/.ra/cache/games", SHARED_USERDATA_PATH);
-	DIR* d = opendir(games_dir);
+	const char* games_dir = RA_Offline_gamesDir();
+	DIR* d = games_dir ? opendir(games_dir) : NULL;
 	if (!d)
 		return 0;
 

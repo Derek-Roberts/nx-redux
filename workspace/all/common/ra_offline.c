@@ -14,6 +14,9 @@
 #define RA_OFFLINE_MAX_PATH 512
 
 static char ra_root[RA_OFFLINE_MAX_PATH] = {0};
+static char ra_games[RA_OFFLINE_MAX_PATH] = {0}; // <root>/cache/games
+// rom.txt records paths relative to this (the card), so another OS can resolve them
+static char ra_card[RA_OFFLINE_MAX_PATH] = {0};
 static RA_NetMode ra_mode = RA_NET_ONLINE;
 static char ra_current_hash[64] = {0};
 static pthread_mutex_t ra_off_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -119,15 +122,21 @@ static bool ra_off_json_find_string(const char* body, const char* key,
  * Public: init / mode / params
  *****************************************************************************/
 
-void RA_Offline_init(const char* root_dir) {
+void RA_Offline_init(const char* root_dir, const char* card_root) {
 	if (!root_dir || !*root_dir)
 		return;
 	snprintf(ra_root, sizeof(ra_root), "%s", root_dir);
+	snprintf(ra_games, sizeof(ra_games), "%s/cache/games", root_dir);
+	snprintf(ra_card, sizeof(ra_card), "%s", card_root ? card_root : "");
+	size_t clen = strlen(ra_card);
+	while (clen > 1 && ra_card[clen - 1] == '/')
+		ra_card[--clen] = '\0';
 	char p[RA_OFFLINE_MAX_PATH];
 	mkdir(ra_root, 0755);
 	snprintf(p, sizeof(p), "%s/cache", ra_root);
 	mkdir(p, 0755);
-	snprintf(p, sizeof(p), "%s/cache/games", ra_root);
+	mkdir(ra_games, 0755);
+	snprintf(p, sizeof(p), "%s/cache/badges", ra_root);
 	mkdir(p, 0755);
 	snprintf(p, sizeof(p), "%s/cache/sessions", ra_root);
 	mkdir(p, 0755);
@@ -152,6 +161,10 @@ RA_NetMode RA_Offline_getMode(void) {
 
 const char* RA_Offline_rootDir(void) {
 	return ra_root[0] ? ra_root : NULL;
+}
+
+const char* RA_Offline_gamesDir(void) {
+	return ra_root[0] ? ra_games : NULL;
 }
 
 const char* RA_Offline_currentGameHash(void) {
@@ -283,8 +296,13 @@ void RA_Offline_setGameRomPath(const char* game_hash, const char* rom_path) {
 		return;
 
 	char dir[RA_OFFLINE_MAX_PATH];
-	snprintf(dir, sizeof(dir), "%s/cache/games/%s", ra_root, game_hash);
+	snprintf(dir, sizeof(dir), "%s/%s", ra_games, game_hash);
 	mkdir(dir, 0755);
+
+	// a path on the card is stored relative to it ("Roms/GBA/x.gba")
+	size_t clen = strlen(ra_card);
+	if (clen && strncmp(rom_path, ra_card, clen) == 0 && rom_path[clen] == '/' && rom_path[clen + 1])
+		rom_path += clen + 1;
 
 	char path[RA_OFFLINE_MAX_PATH + 16];
 	snprintf(path, sizeof(path), "%s/rom.txt", dir);
@@ -296,7 +314,7 @@ bool RA_Offline_getGameRomPath(const char* game_hash, char* out, size_t out_size
 		return false;
 
 	char path[RA_OFFLINE_MAX_PATH + 16];
-	snprintf(path, sizeof(path), "%s/cache/games/%s/rom.txt", ra_root, game_hash);
+	snprintf(path, sizeof(path), "%s/%s/rom.txt", ra_games, game_hash);
 
 	char* body = NULL;
 	size_t len = 0;
@@ -313,7 +331,11 @@ bool RA_Offline_getGameRomPath(const char* game_hash, char* out, size_t out_size
 		return false;
 	}
 
-	snprintf(out, out_size, "%s", body);
+	// relative = card-relative; absolute = an older record
+	if (body[0] != '/' && ra_card[0])
+		snprintf(out, out_size, "%s/%s", ra_card, body);
+	else
+		snprintf(out, out_size, "%s", body);
 	free(body);
 	return true;
 }

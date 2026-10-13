@@ -7,12 +7,10 @@
 #include <unistd.h>
 
 #include "defines.h"
+#include "ra_paths.h"
 
-// "<SHARED_USERDATA_PATH>/.ra" (the old RA_ROOT macro), built with snprintf.
 static const char* ra_root(void) {
-	static char buf[MAX_PATH];
-	snprintf(buf, sizeof(buf), "%s/.ra", SHARED_USERDATA_PATH);
-	return buf;
+	return RA_USER_DIR;
 }
 
 // Recursively delete a directory's contents and the directory itself.
@@ -54,6 +52,9 @@ void RATReset_clearAccountData(void) {
 }
 
 void RATReset_clearAll(void) {
-	// nuke the whole tree; a later online play / prefetch rebuilds it
+	// nuke the whole tree (game data + fallback badges included); a later
+	// online play / prefetch rebuilds it. The console folders'
+	// .retroachievements (hashes.json, badges) stay: rom fingerprints and
+	// images, nothing account-related.
 	rat_rm_rf(ra_root());
 }

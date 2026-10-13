@@ -21,19 +21,14 @@
 #include "ra_auth.h"
 #include "ra_offline.h"
 #include "ra_offline_net.h"
+#include "ra_hash_cache.h"
+#include "ra_paths.h"
 
 #include "ratools_browser.h"
 #include "ratools_data.h"
 #include "ratools_prefetch.h"
 #include "ratools_reset.h"
 #include "ratools_sync.h"
-
-// "<SHARED_USERDATA_PATH>/.ra", built with snprintf.
-static const char* ra_root_dir(void) {
-	static char buf[MAX_PATH];
-	snprintf(buf, sizeof(buf), "%s/.ra", SHARED_USERDATA_PATH);
-	return buf;
-}
 
 SDL_Surface* g_screen = NULL;
 
@@ -161,7 +156,7 @@ static void on_reset_account(void) {
 
 static void on_reset_all(void) {
 	if (ra_confirm("Erase all achievement data?",
-				   "Removes everything including cached games and badges. Redownloaded on next online play.")) {
+				   "Removes everything including cached game data. Redownloaded on next online play. Badges in rom folders are kept.")) {
 		RATReset_clearAll();
 	}
 }
@@ -334,7 +329,7 @@ static void build_menu_tree(void) {
 		"Reset account data", "Clear login and progress. Keeps game data.",
 		on_reset_account);
 	ra_settings_items[idx++] = (SettingItem)ITEM_BUTTON_INIT(
-		"Erase all achievement data", "Remove everything, including games and badges.",
+		"Erase all achievement data", "Remove everything, including cached game data.",
 		on_reset_all);
 	ra_settings_items[idx++] = (SettingItem)ITEM_BUTTON_INIT(
 		"Reset settings to defaults", "Restore the options above to their default values.",
@@ -510,7 +505,8 @@ int main(int argc, char* argv[]) {
 	PWR_init();
 	PAD_init();
 
-	RA_Offline_init(ra_root_dir());
+	RA_Offline_init(RA_USER_DIR, SDCARD_PATH);
+	RA_HashCache_init(ROMS_PATH);
 
 	build_menu_tree();
 	settings_menu_init();

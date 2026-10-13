@@ -10,7 +10,7 @@
 //
 // HOST-TESTABLE: this module may only depend on libc + pthread. No SDL,
 // no rcheevos, no defines.h — the storage root is injected via
-// RA_Offline_init().
+// RA_Offline_init() (device paths: ra_paths.h).
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -30,17 +30,25 @@ typedef enum {
 
 /**
  * Initialize the module. Creates <root>/cache, <root>/cache/games,
- * <root>/cache/sessions and <root>/pending. Resets mode to RA_NET_ONLINE.
- * @param root_dir e.g. SHARED_USERDATA_PATH "/.ra"
+ * <root>/cache/badges, <root>/cache/sessions and <root>/pending. Resets mode
+ * to RA_NET_ONLINE. Game data (cache/games) and the fallback badge folder
+ * (cache/badges, ra_badge_path.h) are the same for every account; login,
+ * sessions and pending are the account's.
+ * @param root_dir e.g. RA_USER_DIR (ra_paths.h)
+ * @param card_root rom.txt stores rom paths relative to this, e.g.
+ *        SDCARD_PATH (NULL: store them as given)
  */
-void RA_Offline_init(const char* root_dir);
+void RA_Offline_init(const char* root_dir, const char* card_root);
 
 void RA_Offline_setMode(RA_NetMode mode);
 RA_NetMode RA_Offline_getMode(void);
 
-/** The cache root passed to RA_Offline_init(), or NULL before init. Lets the
- *  network half enumerate cache/games without hard-coding the path. */
+/** The cache root passed to RA_Offline_init(), or NULL before init. */
 const char* RA_Offline_rootDir(void);
+
+/** <root>/cache/games, or NULL before init. Lets callers enumerate cached
+ *  games without hard-coding the path. */
+const char* RA_Offline_gamesDir(void);
 
 /** true if cache/login.json exists (a login succeeded online at least once) */
 bool RA_Offline_hasLoginCache(void);
@@ -48,14 +56,17 @@ bool RA_Offline_hasLoginCache(void);
 /**
  * Record the rom path used to load a game, keyed by its hash, so the
  * achievements browser can later locate the rom's box art (<dir>/.media/
- * <basename-without-ext>.png). Validates game_hash with the same rule as
- * the cache path components (alnum/_/- only); no-op otherwise.
+ * <basename-without-ext>.png). A path on the card is stored relative to it
+ * (games/<hash>/rom.txt = "Roms/GBA/x.gba"). Validates game_hash with the
+ * same rule as the cache path components (alnum/_/- only); no-op otherwise.
  */
 void RA_Offline_setGameRomPath(const char* game_hash, const char* rom_path);
 
 /**
- * Read back the rom path recorded by RA_Offline_setGameRomPath(). Returns
- * false on miss (never recorded, or game_hash invalid).
+ * Read back the rom path recorded by RA_Offline_setGameRomPath(), always as
+ * an absolute path (a card-relative record gets the card root prepended; an
+ * absolute one from an older build is returned as is). Returns false on
+ * miss (never recorded, or game_hash invalid).
  */
 bool RA_Offline_getGameRomPath(const char* game_hash, char* out, size_t out_size);
 

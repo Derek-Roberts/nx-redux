@@ -21,7 +21,9 @@
 #include "ra_hash_cdreader.h"
 #include "ra_offline.h"
 #include "ra_offline_net.h"
-#include "ra_badge_sets.h"
+#include "ra_badge_path.h"
+#include "ra_hash_cache.h"
+#include "ra_paths.h"
 #include "ui_buttonhintbar.h"
 #include "utils.h"
 #include "ui_downloadprogress.h"
@@ -257,17 +259,14 @@ static char* rat_post_and_cache(rc_api_request_t* request, size_t* out_len) {
 }
 
 // Returns true when the badge is on disk afterwards (cached or downloaded)
-static bool rat_download_badge(const char* url, const char* badge_name, bool locked) {
-	if (!url || !*url || !badge_name || !*badge_name)
+// in the game's badge folder game_dir (ra_badge_path.h, same files as
+// minarch's ra_badges.c)
+static bool rat_download_badge(const char* game_dir, const char* url, const char* badge_name, bool locked) {
+	if (!url || !*url)
 		return false;
-	char path[512];
-	// RA_BADGE_CACHE_DIR (ra_badges.h) is SHARED_USERDATA_PATH "/.ra/badges";
-	// spell the same path out with snprintf, mirroring how ra_badges.c itself
-	// builds this same directory.
-	if (locked)
-		snprintf(path, sizeof(path), "%s/.ra/badges/%s_lock.png", SHARED_USERDATA_PATH, badge_name);
-	else
-		snprintf(path, sizeof(path), "%s/.ra/badges/%s.png", SHARED_USERDATA_PATH, badge_name);
+	char path[1024];
+	if (!RA_BadgePath_inDir(game_dir, badge_name, locked, path, sizeof(path)))
+		return false;
 	struct stat st;
 	if (stat(path, &st) == 0 && st.st_size > 0)
 		return true; // already cached
@@ -344,17 +343,17 @@ static void rat_pf_message(SDL_Surface* screen, const char* line1, const char* l
 	}
 }
 
-// Download any badge files still missing for a parsed sets response
-// (rat_download_badge skips files already on disk). Once every badge is on
-// disk, writes the game's badge-set marker so minarch skips the per-file
-// check at launch. Returns false if the user cancelled with B mid-way.
-static bool rat_download_set_badges(SDL_Surface* screen,
+// Download any badge files still missing for a parsed sets response into
+// the game's badge folder in rom_path's console folder (rat_download_badge
+// skips files already on disk). Returns false if the user cancelled with B
+// mid-way.
+static bool rat_download_set_badges(SDL_Surface* screen, const char* rom_path,
 									const rc_api_fetch_game_sets_response_t* sets,
 									const char* label, int done, int total) {
-	char ra_dir[512];
-	snprintf(ra_dir, sizeof(ra_dir), "%s/.ra", SHARED_USERDATA_PATH);
-	// a partial set must not keep an older marker alive
-	RA_BadgeSets_invalidate(ra_dir, sets->id);
+	char game_dir[1024];
+	if (!RA_BadgePath_dir(RA_BADGE_CACHE_DIR, rom_path, sets->id, game_dir, sizeof(game_dir)) ||
+		!RA_BadgePath_ensureDir(game_dir))
+		return true; // game id 0 (or no folder): nothing to store badges in
 
 	int badge_total = 0;
 	for (uint32_t s = 0; s < sets->num_sets; s++)
@@ -365,23 +364,14 @@ static bool rat_download_set_badges(SDL_Surface* screen,
 	snprintf(sub, sizeof(sub), "%s - badge 0/%d", label, badge_total);
 	rat_pf_render(screen, "Downloading badges", sub, done, total);
 
-	const char** names = badge_total > 0 ? malloc((size_t)(badge_total / 2) * sizeof(const char*)) : NULL;
-	size_t name_count = 0;
-	bool all_ok = true;
 	for (uint32_t s = 0; s < sets->num_sets; s++) {
 		for (uint32_t a = 0; a < sets->sets[s].num_achievements; a++) {
 			PAD_poll();
-			if (PAD_justPressed(BTN_B)) {
-				free(names);
+			if (PAD_justPressed(BTN_B))
 				return false;
-			}
 			const rc_api_achievement_definition_t* def = &sets->sets[s].achievements[a];
-			bool ok = rat_download_badge(def->badge_url, def->badge_name, false);
-			ok = rat_download_badge(def->badge_locked_url, def->badge_name, true) && ok;
-			if (!ok)
-				all_ok = false;
-			else if (names)
-				names[name_count++] = def->badge_name;
+			rat_download_badge(game_dir, def->badge_url, def->badge_name, false);
+			rat_download_badge(game_dir, def->badge_locked_url, def->badge_name, true);
 			badge_done += 2;
 			// refresh every few files so large sets visibly progress
 			// (cheap vs the ~0.5s per actual download)
@@ -391,9 +381,6 @@ static bool rat_download_set_badges(SDL_Surface* screen,
 			}
 		}
 	}
-	if (all_ok && names && name_count > 0)
-		RA_BadgeSets_write(ra_dir, sets->id, names, name_count);
-	free(names);
 	return true;
 }
 
@@ -414,11 +401,8 @@ void RATPrefetch_run(SDL_Surface* screen) {
 		return;
 	}
 
-	// badges directory may not exist on a fresh card (RA_offline's ".ra"
-	// parent was already created by RA_Offline_init() in main())
-	char badges_dir[512];
-	snprintf(badges_dir, sizeof(badges_dir), "%s/.ra/badges", SHARED_USERDATA_PATH);
-	mkdir(badges_dir, 0755);
+	// rat_download_set_badges makes each game's badge folder in the rom's
+	// console folder (the fallback dir was created by RA_Offline_init())
 
 	// CHD-aware hashing for disc images
 	rc_hash_cdreader_t cdreader;
@@ -462,14 +446,27 @@ void RATPrefetch_run(SDL_Surface* screen) {
 
 		const char* name = strrchr(roms[i].path, '/');
 		name = name ? name + 1 : roms[i].path;
-		rat_pf_render(screen, "Hashing", name, i + 1, total);
 
+		// a fingerprint cached by an earlier run, minarch or the Android app
+		// skips the hashing (unknown games are still re-resolved below: RA
+		// may have added them since)
 		char hash[33];
-		if (!rc_hash_generate_from_file(hash, (uint32_t)roms[i].console_id, roms[i].path)) {
-			fprintf(stderr, "[prefetch] hash failed (console %d): %s\n",
-					roms[i].console_id, roms[i].path);
-			failed++;
-			continue;
+		uint32_t console = (uint32_t)roms[i].console_id;
+		bool cacheable = true;
+		uint32_t cached_game = 0;
+		bool from_cache = RA_HashCache_lookup(roms[i].path, console, hash, &cached_game);
+		if (from_cache) {
+			rat_pf_render(screen, "Checking", name, i + 1, total);
+		} else {
+			// a raw archive hash is still worth resolving, just not caching
+			cacheable = RA_HashCache_canStore(roms[i].path, console);
+			rat_pf_render(screen, "Hashing", name, i + 1, total);
+			if (!rc_hash_generate_from_file(hash, console, roms[i].path)) {
+				fprintf(stderr, "[prefetch] hash failed (console %d): %s\n",
+						roms[i].console_id, roms[i].path);
+				failed++;
+				continue;
+			}
 		}
 
 		// skip refetching games whose data is already cached — but still
@@ -492,9 +489,11 @@ void RATPrefetch_run(SDL_Surface* screen) {
 			rc_api_fetch_game_sets_response_t cached_sets;
 			if (rc_api_process_fetch_game_sets_server_response(&cached_sets, &sr) == RC_OK &&
 				cached_sets.response.succeeded) {
+				if (cacheable)
+					RA_HashCache_store(roms[i].path, console, hash, cached_sets.id);
 				// cancel mid-repair keeps sets.json: the data is complete and
 				// the missing badges are retried on the next run anyway
-				if (!rat_download_set_badges(screen, &cached_sets,
+				if (!rat_download_set_badges(screen, roms[i].path, &cached_sets,
 											 cached_sets.title ? cached_sets.title : name,
 											 i + 1, total))
 					cancelled = true;
@@ -529,11 +528,20 @@ void RATPrefetch_run(SDL_Surface* screen) {
 		int hrc = rc_api_process_resolve_hash_server_response(&hresp, &sr);
 		bool resolved = (hrc == RC_OK && hresp.response.succeeded);
 		bool known = resolved && hresp.game_id != 0;
+		uint32_t game_id = known ? hresp.game_id : 0;
 		rc_api_destroy_resolve_hash_response(&hresp);
 		free(body);
 		if (!resolved) {
 			failed++; // server error / corrupt response — NOT "not in RA"
 			continue;
+		}
+		if (from_cache && !known && cached_game != 0) {
+			// stored for a game, unknown now: the file changed keeping its size
+			// and mtime, or RA dropped the hash. Forget it; the next launch or
+			// run hashes the file again.
+			RA_HashCache_forget(roms[i].path);
+		} else if (cacheable) { // authoritative either way: game id, or 0 = not in RA
+			RA_HashCache_store(roms[i].path, console, hash, game_id);
 		}
 		if (!known) {
 			unknown++; // authoritatively resolved: hash not in RA database
@@ -584,15 +592,14 @@ void RATPrefetch_run(SDL_Surface* screen) {
 		}
 
 		// 4) badges (both variants), with cancel checks between downloads
-		if (!rat_download_set_badges(screen, &sets,
+		if (!rat_download_set_badges(screen, roms[i].path, &sets,
 									 sets.title ? sets.title : name, i + 1, total))
 			cancelled = true;
 		if (cancelled) {
 			// partial badge set: drop the cached sets.json so the next
 			// prefetch run refetches this game instead of skipping it
 			char sets_path[512];
-			snprintf(sets_path, sizeof(sets_path),
-					 "%s/.ra/cache/games/%s/sets.json", SHARED_USERDATA_PATH, hash);
+			snprintf(sets_path, sizeof(sets_path), "%s/%s", RA_USER_DIR, rel);
 			remove(sets_path);
 		}
 		rc_api_destroy_fetch_game_sets_response(&sets);

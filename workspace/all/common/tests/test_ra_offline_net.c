@@ -89,7 +89,7 @@ static void write_file(const char* rel, const char* body) {
 
 static void setup(void) {
 	assert(system("rm -rf " ROOT) == 0);
-	RA_Offline_init(ROOT);
+	RA_Offline_init(ROOT, NULL);
 	// game 100 (GBA): core set + bonus set 101; one unlock, earned in the bonus set
 	write_file("cache/games/aaaa1111/sets.json",
 			   "{\"Success\":true,\"GameId\":100,\"Title\":\"Subset Game\",\"ConsoleId\":5,"

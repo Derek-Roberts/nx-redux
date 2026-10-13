@@ -7,6 +7,8 @@
 #include "ra_badges.h"
 #include "ra_offline.h"
 #include "ra_offline_net.h"
+#include "ra_hash_cache.h"
+#include "ra_paths.h"
 #include "defines.h"
 #include "api.h"
 
@@ -50,6 +52,18 @@ static char ra_current_rom_path[512] = {0};
 // Path rom.txt records when set (RA_setRecordedRomPath): the launcher's path for
 // an archive, whose content is hashed/loaded from its extracted tmp copy
 static char ra_record_rom_path[512] = {0};
+
+// Hash cache (ra_hash_cache.h) bookkeeping for the load in flight: the path
+// the fingerprint is keyed on (the record path), the console it was hashed
+// for, and - when the hash came from the cache - the game id stored with it.
+// A cached hash that turns out unknown although it was stored for a game gets
+// one rehash (ra_hash_retry_pending, run from the main thread loop).
+static char ra_hash_key_path[512] = {0};
+static uint32_t ra_hash_console = 0;
+static bool ra_hash_from_cache = false;
+static uint32_t ra_hash_cached_game = 0;
+static bool ra_hash_retried = false;
+static bool ra_hash_retry_pending = false;
 
 // Muted achievements tracking
 #define RA_MAX_MUTED_ACHIEVEMENTS 1024
@@ -335,7 +349,7 @@ static void ra_process_queued_responses(void) {
  * Helper: Muted achievements file path
  *****************************************************************************/
 static void ra_get_mute_file_path(char* path, size_t path_size) {
-	snprintf(path, path_size, "%s/.ra/muted/%s.txt", SHARED_USERDATA_PATH, ra_game_hash);
+	snprintf(path, path_size, "%s/muted/%s.txt", RA_USER_DIR, ra_game_hash);
 }
 
 /*****************************************************************************
@@ -343,9 +357,9 @@ static void ra_get_mute_file_path(char* path, size_t path_size) {
  *****************************************************************************/
 static void ra_ensure_mute_dir(void) {
 	char dir_path[512];
-	snprintf(dir_path, sizeof(dir_path), "%s/.ra", SHARED_USERDATA_PATH);
+	snprintf(dir_path, sizeof(dir_path), "%s", RA_USER_DIR);
 	mkdir(dir_path, 0755);
-	snprintf(dir_path, sizeof(dir_path), "%s/.ra/muted", SHARED_USERDATA_PATH);
+	snprintf(dir_path, sizeof(dir_path), "%s/muted", RA_USER_DIR);
 	mkdir(dir_path, 0755);
 }
 
@@ -817,7 +831,7 @@ static void ra_event_handler(const rc_client_event_t* event, rc_client_t* client
 		snprintf(message, sizeof(message), "Achievement Unlocked: %s",
 				 event->achievement->title);
 		// Get the unlocked badge icon (not locked)
-		badge_icon = RA_Badges_getNotificationSize(event->achievement->badge_name, false);
+		badge_icon = RA_Badges_getNotificationSize(RA_getGameId(), event->achievement->badge_name, false);
 		Notification_push(NOTIFICATION_ACHIEVEMENT, message, badge_icon);
 		RA_LOG_INFO("Achievement unlocked: %s (%d points)\n",
 					event->achievement->title, event->achievement->points);
@@ -841,7 +855,7 @@ static void ra_event_handler(const rc_client_event_t* event, rc_client_t* client
 			break;
 		}
 		// Show progress indicator with badge icon
-		badge_icon = RA_Badges_getNotificationSize(event->achievement->badge_name, false);
+		badge_icon = RA_Badges_getNotificationSize(RA_getGameId(), event->achievement->badge_name, false);
 		Notification_showProgressIndicator(
 			event->achievement->title,
 			event->achievement->measured_progress,
@@ -858,7 +872,7 @@ static void ra_event_handler(const rc_client_event_t* event, rc_client_t* client
 			break;
 		}
 		// Update progress indicator with new value
-		badge_icon = RA_Badges_getNotificationSize(event->achievement->badge_name, false);
+		badge_icon = RA_Badges_getNotificationSize(RA_getGameId(), event->achievement->badge_name, false);
 		Notification_showProgressIndicator(
 			event->achievement->title,
 			event->achievement->measured_progress,
@@ -1101,9 +1115,43 @@ static void ra_prefetch_badges(rc_client_t* client, uint32_t game_id) {
  * Callback: Game load callback
  *****************************************************************************/
 
+// Record the fingerprint once the server has answered for the hash: known
+// (game id) or unknown to RA (0). Returns true when a stale cached hash
+// should be rehashed instead (it was stored for a game, now it is unknown).
+static bool ra_hash_cache_update(int result, rc_client_t* client) {
+	const rc_client_game_t* game = rc_client_get_game_info(client);
+	bool known = result == RC_OK && game && game->id != 0;
+	bool unknown = result == RC_NO_GAME_LOADED || (result == RC_OK && game && game->id == 0);
+	if (!ra_hash_key_path[0] || !game || !game->hash || (!known && !unknown))
+		return false; // network/login failure: no authoritative answer
+	uint32_t game_id = known ? game->id : 0;
+
+	if (ra_hash_from_cache) {
+		if (unknown && ra_hash_cached_game != 0 && !ra_hash_retried) {
+			// the file changed while keeping size+mtime, or RA dropped the hash
+			RA_LOG_WARN("Cached hash %s (game %u) is unknown now - rehashing\n", game->hash,
+						ra_hash_cached_game);
+			RA_HashCache_forget(ra_hash_key_path);
+			return true;
+		}
+		if (game_id == ra_hash_cached_game)
+			return false; // nothing new to store
+	} else if (!RA_HashCache_canStore(ra_current_rom_path, ra_hash_console)) {
+		return false; // a raw archive hash (the core opens .zip/.7z itself)
+	}
+	if (!RA_HashCache_store(ra_hash_key_path, ra_hash_console, game->hash, game_id))
+		RA_LOG_DEBUG("Hash not cached for %s\n", ra_hash_key_path);
+	return false;
+}
+
 static void ra_game_loaded_callback(int result, const char* error_message,
 									rc_client_t* client, void* userdata) {
 	(void)userdata;
+
+	if (ra_hash_cache_update(result, client)) {
+		ra_hash_retry_pending = true; // ra_service_main_thread starts it
+		return;
+	}
 
 	if (result == RC_OK) {
 		const rc_client_game_t* game = rc_client_get_game_info(client);
@@ -1130,8 +1178,10 @@ static void ra_game_loaded_callback(int result, const char* error_message,
 			// Load muted achievements for this game
 			ra_load_muted_achievements();
 
-			// Initialize badge cache and prefetch achievement badges
+			// Initialize badge cache and prefetch achievement badges into
+			// the rom's console folder
 			RA_Badges_init();
+			RA_Badges_setRomPath(record_path);
 			ra_prefetch_badges(client, game->id);
 
 			// Show achievement summary
@@ -1200,9 +1250,8 @@ void RA_init(void) {
 		return;
 	}
 
-	char ra_offline_dir[MAX_PATH];
-	snprintf(ra_offline_dir, sizeof(ra_offline_dir), "%s/.ra", SHARED_USERDATA_PATH);
-	RA_Offline_init(ra_offline_dir);
+	RA_Offline_init(RA_USER_DIR, SDCARD_PATH);
+	RA_HashCache_init(ROMS_PATH);
 
 	// Determine connectivity. Unlike before, no WiFi no longer disables RA -
 	// if a login was ever cached we run in offline mode instead.
@@ -1465,6 +1514,25 @@ static void ra_do_load_game(const char* rom_path, const uint8_t* rom_data, size_
 	// This ensures rcheevos can read memory correctly when checking achievements
 	RA_initMemoryRegions((uint32_t)console_id);
 
+	// A fingerprint cached for this file (by this launch, an earlier one, the
+	// pak's prefetch or the Android app) skips hashing. The server is still
+	// asked about the hash, so a game RA learns later is picked up.
+	const char* key_path = ra_record_rom_path[0] ? ra_record_rom_path : rom_path;
+	snprintf(ra_hash_key_path, sizeof(ra_hash_key_path), "%s", key_path);
+	ra_hash_console = (uint32_t)console_id;
+	ra_hash_from_cache = false;
+	ra_hash_retried = false;
+	ra_hash_retry_pending = false;
+	char cached_hash[33];
+	uint32_t cached_game = 0;
+	if (RA_HashCache_lookup(key_path, (uint32_t)console_id, cached_hash, &cached_game)) {
+		RA_LOG_INFO("Hash cache hit: %s (game %u)\n", cached_hash, cached_game);
+		ra_hash_from_cache = true;
+		ra_hash_cached_game = cached_game;
+		rc_client_begin_load_game(ra_client, cached_hash, ra_game_loaded_callback, NULL);
+		return;
+	}
+
 	// Use rc_client_begin_identify_and_load_game which hashes and identifies the ROM
 #ifdef RC_CLIENT_SUPPORTS_HASH
 	rc_client_begin_identify_and_load_game(ra_client, console_id,
@@ -1539,6 +1607,7 @@ void RA_unloadGame(void) {
 		return;
 	}
 	ra_game_unknown = false;
+	ra_hash_retry_pending = false;
 
 	if (ra_game_loaded) {
 		RA_LOG_INFO("Unloading game\n");
@@ -1550,6 +1619,7 @@ void RA_unloadGame(void) {
 
 		// Clear badge cache memory (keeps disk cache)
 		RA_Badges_clearMemory();
+		RA_Badges_setRomPath(NULL);
 
 		// Clean up memory regions for this game
 		if (ra_memory_regions_initialized) {
@@ -1572,6 +1642,19 @@ void RA_unloadGame(void) {
 // auto-resume launch after a sleep that ended in power-off, must keep
 // retrying during gameplay or RA stays dead for the whole session.
 static void ra_service_main_thread(void) {
+	// A cached hash came back unknown: hash the file once more. From the
+	// path - the deferred-load copy of the rom data is gone by now.
+	if (ra_hash_retry_pending) {
+		ra_hash_retry_pending = false;
+		ra_hash_retried = true;
+		ra_hash_from_cache = false;
+#ifdef RC_CLIENT_SUPPORTS_HASH
+		rc_client_unload_game(ra_client); // the placeholder "Unknown Game"
+		rc_client_begin_identify_and_load_game(ra_client, ra_hash_console, ra_current_rom_path,
+											   NULL, 0, ra_game_loaded_callback, NULL);
+#endif
+	}
+
 	// Check for pending login retry
 	if (ra_login_retry.pending && SDL_GetTicks() >= ra_login_retry.next_time) {
 		ra_login_retry.pending = false;
@@ -1668,6 +1751,13 @@ bool RA_isGameLoaded(void) {
 
 bool RA_isGameUnknown(void) {
 	return ra_game_unknown;
+}
+
+uint32_t RA_getGameId(void) {
+	if (!ra_client || !ra_game_loaded)
+		return 0;
+	const rc_client_game_t* game = rc_client_get_game_info(ra_client);
+	return game ? game->id : 0;
 }
 
 bool RA_isHardcoreModeActive(void) {

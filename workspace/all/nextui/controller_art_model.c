@@ -30,7 +30,6 @@ static const struct {
 	{"dos", "vic20"},
 	{"prboom", "vic20"}, // Doom, a DOS game
 	{"p8", "vic20"},	 // Pico-8, a fantasy computer
-	{"ports", "vic20"},	 // PortMaster: PC games
 };
 
 const PadTableRow* Pad_row(const char* id) {

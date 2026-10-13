@@ -39,9 +39,9 @@ int main(void) {
 	// the computers, Doom and Pico-8 on the VIC-20's keyboard
 	assert(is("Pico-8 (P8)", "vic20") && is("Doom (PRBOOM)", "vic20") && is("Ms-Dos (DOS)", "vic20"));
 	assert(is("Commodore PET (PET)", "vic20") && is("Amstrad CPC (CPC)", "vic20") && is("Microsoft MSX (MSX)", "vic20"));
-	assert(is("Arcade (FBN)", "c64")); // the Competition Pro, an arcade stick
+	assert(is("Arcade (FBN)", "c64"));	  // the Competition Pro, an arcade stick
+	assert(is("Ports (PORTS)", "ports")); // a generic modern gamepad
 	// no hardware of their own, or no image: keep the logo
-	assert(is("Ports (PORTS)", "vic20"));
 	assert(is("Nintendo 3DS (3DS)", NULL));
 	// the Commodores: the VIC-20 itself; the C64, C128, Plus/4 and Amiga on the Competition Pro
 	assert(is("Commodore VIC20 (VIC)", "vic20") && is("Commodore 64 (C64)", "c64") && is("Commodore 128 (C128)", "c64"));

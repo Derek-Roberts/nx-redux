@@ -27,6 +27,7 @@ SOURCES = {   # console id -> source file name (without .png)
     "lynx": "atari-lynx", "a2600": "atari-2600", "a5200": "atari-5200", "a7800": "atari-7800",
     "pkm": "pokemon-mini", "wsc": "wonderswan-color", "coleco": "colecovision", "dc": "dreamcast",
     "vic20": "commodore-vic-20", "c64": "competition-pro",   # the Competition Pro also covers C128, Plus/4 and Amiga
+    "ports": "controller",   # not ScreenScraper: a generic modern gamepad (the user's own image) for PortMaster
 }
 K = {   # docs/controller-art.md's table (measured, gba/fc/psp set by eye); an id missing here takes its measured k
     "ps": 1.00, "psp": 1.50, "nds": 0.65, "n64": 0.79, "gb": 0.77, "gbc": 1.26, "gba": 1.15, "fc": 0.80,

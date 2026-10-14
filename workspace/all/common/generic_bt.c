@@ -198,6 +198,18 @@ static int bt_system(const char* cmd) {
 	return bt_run_cmd_deadline(cmd, NULL, 0, 30);
 }
 
+// Pair and Connect may need the same 30-second cap while their output is
+// checked for BlueZ errors. Short property queries still use bt_run_cmd.
+static int bt_run_cmd_long(const char* cmd, char* output, size_t output_len) {
+	if (!bt_daemon_alive()) {
+		LOG_warn("bluetoothd not running, skipping command: %s\n", cmd);
+		if (output && output_len > 0)
+			output[0] = '\0';
+		return -1;
+	}
+	return bt_run_cmd_deadline(cmd, output, output_len, 30);
+}
+
 // Bluetoothctl version detection
 static int bluetoothctl_major_version = 0;
 static int bluetoothctl_minor_version = 0;
@@ -608,6 +620,38 @@ int PLAT_bluetoothScan(struct BT_device* devices, int max) {
 	return count;
 }
 
+// Match a complete bluetoothctl property line, never a substring of Name/Alias.
+static bool bt_property_is(const char* output, const char* property, bool yes) {
+	const char* expected = yes ? "yes" : "no";
+	size_t expected_len = strlen(expected);
+	while (*output) {
+		const char* end = strchr(output, '\n');
+		if (!end)
+			end = output + strlen(output);
+		while (output < end && (*output == ' ' || *output == '\t'))
+			output++;
+		size_t len = strlen(property);
+		if ((size_t)(end - output) >= len && strncmp(output, property, len) == 0) {
+			const char* value = output + len;
+			while (value < end && (*value == ' ' || *value == '\t'))
+				value++;
+			if ((size_t)(end - value) >= expected_len && strncmp(value, expected, expected_len) == 0) {
+				value += expected_len;
+				while (value < end && (*value == ' ' || *value == '\t' || *value == '\r'))
+					value++;
+				if (value == end)
+					return true;
+			}
+		}
+		output = *end ? end + 1 : end;
+	}
+	return false;
+}
+
+static bool bt_property_yes(const char* output, const char* property) {
+	return bt_property_is(output, property, true);
+}
+
 int PLAT_bluetoothPaired(struct BT_devicePaired* paired, int max) {
 	if (!PLAT_bluetoothEnabled()) {
 		return 0;
@@ -695,15 +739,15 @@ int PLAT_bluetoothPaired(struct BT_devicePaired* paired, int max) {
 				device->remote_addr[sizeof(device->remote_addr) - 1] = '\0';
 				strncpy(device->remote_name, name, sizeof(device->remote_name) - 1);
 				device->remote_name[sizeof(device->remote_name) - 1] = '\0';
-				device->is_bonded = true;
 				device->rssi = -50; // Default value, actual RSSI requires active connection
 
 				// Check if connected
 				char cmd[256];
 				char info_output[1024];
-				snprintf(cmd, sizeof(cmd), "bluetoothctl info %s 2>/dev/null | grep 'Connected: yes'", addr);
-				device->is_connected = (bt_run_cmd(cmd, info_output, sizeof(info_output)) == 0 &&
-										strstr(info_output, "Connected: yes") != NULL);
+				snprintf(cmd, sizeof(cmd), "bluetoothctl info %s 2>/dev/null", addr);
+				bool info_ok = bt_run_cmd(cmd, info_output, sizeof(info_output)) == 0;
+				device->is_bonded = info_ok && bt_property_yes(info_output, "Bonded:");
+				device->is_connected = info_ok && bt_property_yes(info_output, "Connected:");
 
 				btlog("Paired device: %s (%s) connected=%d\n", device->remote_addr, device->remote_name, device->is_connected);
 				count++;
@@ -715,28 +759,72 @@ int PLAT_bluetoothPaired(struct BT_devicePaired* paired, int max) {
 	return count;
 }
 
-void PLAT_bluetoothPair(char* addr) {
+// BlueZ 5.78 ignores --agent for noninteractive commands. Explicitly enable
+// bonding for this operation, then restore an initially nonpairable adapter.
+static int bt_pair_with_bonding(const char* cmd, char* output, size_t output_len) {
+	char state[2048];
+	if (bt_run_cmd("bluetoothctl show 2>/dev/null", state, sizeof(state)) != 0)
+		return -1;
+	bool was_pairable = bt_property_yes(state, "Pairable:");
+	if (!was_pairable && !bt_property_is(state, "Pairable:", false))
+		return -1;
+
+	int ret = -1;
+	if (!was_pairable) {
+		if (bt_run_cmd("bluetoothctl pairable on 2>&1", state, sizeof(state)) != 0 ||
+			strstr(state, "Failed") != NULL)
+			goto restore;
+		if (bt_run_cmd("bluetoothctl show 2>/dev/null", state, sizeof(state)) != 0 ||
+			!bt_property_yes(state, "Pairable:"))
+			goto restore;
+	}
+	ret = bt_run_cmd_long(cmd, output, output_len);
+
+restore:
+	// Attempt restoration even if enabling timed out after reaching BlueZ.
+	// Keep Pair's output separate so cleanup cannot hide an authentication error.
+	if (!was_pairable &&
+		(bt_run_cmd("bluetoothctl pairable off 2>&1", state, sizeof(state)) != 0 ||
+		 strstr(state, "Failed") != NULL))
+		LOG_error("BT could not restore nonpairable state\n");
+	return ret;
+}
+
+int PLAT_bluetoothPair(char* addr) {
 	btlog("Pairing with %s\n", addr);
-
 	char cmd[256];
+	char output[2048];
 
-	// Trust first for automatic reconnection
-	snprintf(cmd, sizeof(cmd), "bluetoothctl trust %s 2>/dev/null", addr);
-	bt_system(cmd);
-
-	// Pair with built-in NoInputNoOutput agent (auto-accepts confirmation)
-	snprintf(cmd, sizeof(cmd), "bluetoothctl --agent NoInputNoOutput pair %s 2>/dev/null", addr);
-	int ret = bt_system(cmd);
-	if (ret != 0) {
+	// Trust is a reconnection policy, not evidence that pairing succeeded.
+	snprintf(cmd, sizeof(cmd), "bluetoothctl --agent NoInputNoOutput pair %s 2>&1", addr);
+	int ret = bt_pair_with_bonding(cmd, output, sizeof(output));
+	if (ret != 0 || strstr(output, "Failed to pair") != NULL) {
 		LOG_error("BT pair failed: %d\n", ret);
+		return BT_PAIR_FAILED;
+	}
+	// bluetoothctl versions differ in their exit status on D-Bus errors.
+	// Confirm the actual device state before treating the operation as success.
+	snprintf(cmd, sizeof(cmd), "bluetoothctl info %s 2>/dev/null", addr);
+	if (bt_run_cmd(cmd, output, sizeof(output)) != 0 ||
+		!bt_property_yes(output, "Paired:")) {
+		LOG_error("BT pair did not establish pairing\n");
+		return BT_PAIR_FAILED;
 	}
 
-	// Connect after pairing
-	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>/dev/null", addr);
-	bt_system(cmd);
-
-	// Remove from discovered list since it's now paired
+	if (!bt_property_yes(output, "Bonded:")) {
+		LOG_error("BT pair did not establish a saved bond\n");
+		return BT_PAIR_FAILED;
+	}
 	bt_remove_discovered_device(addr);
+	snprintf(cmd, sizeof(cmd), "bluetoothctl trust %s 2>&1", addr);
+	if (bt_run_cmd(cmd, output, sizeof(output)) != 0 || strstr(output, "Failed") != NULL)
+		return BT_PAIR_TRUST_FAILED;
+
+	// Connection alone does not imply an audio sink is ready.
+	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>&1", addr);
+	if (bt_run_cmd_long(cmd, output, sizeof(output)) != 0 || strstr(output, "Failed") != NULL)
+		return BT_PAIR_CONNECT_FAILED;
+	return BT_PAIR_OK;
 }
 
 void PLAT_bluetoothUnpair(char* addr) {
@@ -763,9 +851,10 @@ void PLAT_bluetoothConnect(char* addr) {
 	btlog("Connecting to %s\n", addr);
 
 	char cmd[256];
-	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>/dev/null", addr);
-	int ret = bt_system(cmd);
-	if (ret != 0) {
+	char output[2048];
+	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>&1", addr);
+	int ret = bt_run_cmd_long(cmd, output, sizeof(output));
+	if (ret != 0 || strstr(output, "Failed") != NULL) {
 		LOG_error("BT connect failed: %d\n", ret);
 	}
 	LOG_info("BT connect returned: %d\n", ret);

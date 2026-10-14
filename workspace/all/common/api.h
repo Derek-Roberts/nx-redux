@@ -1106,8 +1106,10 @@ bool PLAT_bluetoothDiscovering();
 int PLAT_bluetoothScan(struct BT_device* devices, int max);
 // returns the list of paired devices
 int PLAT_bluetoothPaired(struct BT_devicePaired* devices, int max);
-// pair with the given address
-void PLAT_bluetoothPair(char* addr);
+// Pair succeeds only after BlueZ reports a saved bond.
+enum { BT_PAIR_OK = 0, BT_PAIR_FAILED = -1,
+	BT_PAIR_TRUST_FAILED = -2, BT_PAIR_CONNECT_FAILED = -3 };
+int PLAT_bluetoothPair(char* addr);
 // unpair from the given address
 void PLAT_bluetoothUnpair(char* addr);
 // connect with the given address

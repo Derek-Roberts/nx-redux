@@ -4859,7 +4859,7 @@ FALLBACK_IMPLEMENTATION int PLAT_bluetoothScan(struct BT_device* devices, int ma
 FALLBACK_IMPLEMENTATION int PLAT_bluetoothPaired(struct BT_devicePaired* devices, int max) {
 	return 0;
 }
-FALLBACK_IMPLEMENTATION void PLAT_bluetoothPair(char* addr) {}
+FALLBACK_IMPLEMENTATION int PLAT_bluetoothPair(char* addr) { return BT_PAIR_FAILED; }
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothUnpair(char* addr) {}
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothConnect(char* addr) {}
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothDisconnect(char* addr) {}

@@ -19,6 +19,7 @@ typedef struct {
 	char addr[18];
 	BluetoothDeviceType device_type;
 	int paired;
+	int bonded;
 	int connected;
 } BtDeviceInfo;
 
@@ -129,6 +130,11 @@ typedef struct {
 // writes on completion must remain valid. The busy flag rejects a second action
 // until the first worker has finished with the shared context.
 static BtActionCtx bt_action_ctx;
+static volatile int bt_pair_result = BT_PAIR_OK;
+
+static void bt_pair_worker(char* addr) {
+	bt_pair_result = BT_pair(addr);
+}
 
 static void* bt_action_thread(void* arg) {
 	(void)arg;
@@ -145,6 +151,7 @@ static void bt_run_action(void (*action)(char*), const char* addr, const char* m
 	if (bt_action_ctx.busy) // a previous action is still running in the background
 		return;
 
+	bt_pair_result = BT_PAIR_OK;
 	bt_action_ctx.action = action;
 	bt_action_ctx.addr[0] = '\0';
 	strncpy(bt_action_ctx.addr, addr, sizeof(bt_action_ctx.addr) - 1);
@@ -174,7 +181,7 @@ static void bt_action_disconnect(void) {
 static void bt_action_pair(void) {
 	if (!active_bt_options)
 		return;
-	bt_run_action(BT_pair, active_bt_options->dev_info.addr, "Pairing...");
+	bt_run_action(bt_pair_worker, active_bt_options->dev_info.addr, "Pairing...");
 }
 
 static void bt_action_unpair(void) {
@@ -292,7 +299,7 @@ static void bt_device_draw(SDL_Surface* screen, SettingItem* item,
 
 	// Status label
 	const char* status = info->connected ? "Connected"
-						 : info->paired	 ? "Paired"
+						 : info->bonded	 ? "Paired"
 										 : "Available";
 
 	// Device name (truncate first so we know the label width for pills)
@@ -433,6 +440,7 @@ static void* bt_scanner(void* arg) {
 			strncpy(dinfo->name, paired[i].remote_name, sizeof(dinfo->name) - 1);
 			strncpy(dinfo->addr, paired[i].remote_addr, sizeof(dinfo->addr) - 1);
 			dinfo->paired = 1;
+			dinfo->bonded = paired[i].is_bonded;
 			dinfo->connected = paired[i].is_connected;
 
 			dinfo->device_type = BLUETOOTH_NONE;
@@ -465,6 +473,7 @@ static void* bt_scanner(void* arg) {
 			strncpy(dinfo->name, available[i].name, sizeof(dinfo->name) - 1);
 			strncpy(dinfo->addr, available[i].addr, sizeof(dinfo->addr) - 1);
 			dinfo->paired = 0;
+			dinfo->bonded = 0;
 			dinfo->connected = 0;
 			dinfo->device_type = available[i].kind;
 
@@ -541,7 +550,13 @@ static void bt_on_tick(SettingsPage* page) {
 	}
 
 	// Show scanning hint when BT is on but no devices listed yet
-	if (BT_enabled() && page->dynamic_start >= 0 && page->item_count <= page->dynamic_start) {
+	if (bt_action_ctx.done && bt_pair_result != BT_PAIR_OK) {
+		page->status_msg = bt_pair_result == BT_PAIR_FAILED
+			? "Pairing failed. Put device in pairing mode and retry."
+			: bt_pair_result == BT_PAIR_TRUST_FAILED
+			? "Paired, but automatic reconnection setup failed."
+			: "Paired, but connection failed. Retry Connect.";
+	} else if (BT_enabled() && page->dynamic_start >= 0 && page->item_count <= page->dynamic_start) {
 		page->status_msg = "Scanning for devices...";
 	} else {
 		page->status_msg = NULL;

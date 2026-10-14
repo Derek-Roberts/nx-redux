@@ -1100,7 +1100,11 @@ bool PLAT_bluetoothDiagnosticsEnabled();
 // returns true if diagnostic logging is enabled
 void PLAT_bluetoothDiagnosticsEnable(bool on);
 // enables or disabled bt discovery.
+enum { BT_DISCOVERY_IDLE, BT_DISCOVERY_STARTING, BT_DISCOVERY_ACTIVE,
+	BT_DISCOVERY_COMPLETE, BT_DISCOVERY_FAILED, BT_DISCOVERY_INTERRUPTED, BT_DISCOVERY_STOPPED };
+// One bounded, owned radio session; inventory queries do not start discovery.
 void PLAT_bluetoothDiscovery(int on);
+int PLAT_bluetoothDiscoveryState(void);
 bool PLAT_bluetoothDiscovering();
 // returns the list of available devices
 int PLAT_bluetoothScan(struct BT_device* devices, int max);
@@ -1139,6 +1143,7 @@ void PLAT_bluetoothSetVolume(int vol);
 #define BT_diagnosticsEnable PLAT_bluetoothDiagnosticsEnable
 #define BT_discovery PLAT_bluetoothDiscovery
 #define BT_discovering PLAT_bluetoothDiscovering
+#define BT_discoveryState PLAT_bluetoothDiscoveryState
 #define BT_availableDevices PLAT_bluetoothScan
 #define BT_pairedDevices PLAT_bluetoothPaired
 #define BT_pair PLAT_bluetoothPair

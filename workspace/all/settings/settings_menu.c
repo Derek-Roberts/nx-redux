@@ -444,7 +444,8 @@ static void render_settings_mode(SDL_Surface* screen, SettingsPage* page, ListLa
 			.value = NULL,
 			.swatch = -1,
 			.cycleable = 0,
-			.desc = item->desc,
+			.desc = page->status_in_description && page->status_msg
+				? page->status_msg : item->desc,
 			.custom_draw = NULL,
 			.custom_draw_ctx = NULL,
 		};
@@ -480,7 +481,7 @@ static void render_settings_mode(SDL_Surface* screen, SettingsPage* page, ListLa
 	}
 
 	UI_renderSettingsPage(screen, layout, ui_items, vis_count,
-						  page->selected, &page->scroll, page->status_msg);
+						  page->selected, &page->scroll, page->status_in_description ? NULL : page->status_msg);
 }
 
 // ============================================

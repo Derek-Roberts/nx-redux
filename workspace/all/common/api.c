@@ -4850,6 +4850,7 @@ FALLBACK_IMPLEMENTATION bool PLAT_bluetoothDiagnosticsEnabled() {
 }
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothDiagnosticsEnable(bool on) {}
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothDiscovery(int on) {}
+FALLBACK_IMPLEMENTATION int PLAT_bluetoothDiscoveryState(void) { return BT_DISCOVERY_FAILED; }
 FALLBACK_IMPLEMENTATION bool PLAT_bluetoothDiscovering() {
 	return false;
 }

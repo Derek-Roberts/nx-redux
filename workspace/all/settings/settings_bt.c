@@ -27,7 +27,8 @@ typedef struct {
 // Static items
 // ============================================
 
-#define BT_STATIC_COUNT 2
+#define BT_STATIC_COUNT 3
+#define BT_IDX_SCAN 2
 #define BT_IDX_TOGGLE 0
 #define BT_IDX_DIAG 1
 
@@ -42,6 +43,11 @@ static volatile int bt_scanner_running = 0;
 static volatile int bt_needs_refresh = 0;
 static int bt_scanner_started = 0;
 static SettingsPage* bt_page_ref = NULL;
+// Gate starts against page exit; the inventory worker may still be finishing
+// a query after the page is popped, but cannot start another radio session.
+static pthread_mutex_t bt_scan_lifecycle = PTHREAD_MUTEX_INITIALIZER;
+static int bt_scan_requested;
+static int bt_scanner_failed;
 
 // ============================================
 // BT device options submenu
@@ -54,6 +60,7 @@ typedef struct {
 } BtDeviceOptions;
 
 // Forward declarations
+static void* bt_scanner(void* arg);
 static void bt_on_show(SettingsPage* page);
 static void bt_on_hide(SettingsPage* page);
 static void bt_on_tick(SettingsPage* page);
@@ -78,6 +85,12 @@ static struct {
 static void* bt_toggle_thread(void* arg) {
 	(void)arg;
 	BT_enable(bt_toggle_ctx.val ? true : false);
+	pthread_mutex_lock(&bt_scan_lifecycle);
+	if (bt_page_ref && bt_toggle_ctx.val && BT_enabled()) {
+		bt_scan_requested = 1;
+		bt_needs_refresh = 1;
+	}
+	pthread_mutex_unlock(&bt_scan_lifecycle);
 	bt_toggle_ctx.done = 1;
 	bt_toggle_ctx.busy = 0;
 	return NULL;
@@ -110,6 +123,28 @@ static int bt_get_diag(void) {
 
 static void bt_set_diag(int val) {
 	BT_diagnosticsEnable(val ? true : false);
+}
+
+// Scan again queues one request; cached inventory refreshes never queue scans.
+static void bt_scan_again(void) {
+	pthread_mutex_lock(&bt_scan_lifecycle);
+	int state = BT_discoveryState();
+	if (bt_page_ref && BT_enabled() && !bt_scan_requested && !bt_toggle_ctx.busy &&
+		state != BT_DISCOVERY_STARTING && state != BT_DISCOVERY_ACTIVE) {
+		if (bt_scanner_failed) {
+			bt_scanner_running = 1;
+			if (pthread_create(&bt_scanner_thread, NULL, bt_scanner, bt_page_ref) != 0) {
+				bt_scanner_running = 0;
+				pthread_mutex_unlock(&bt_scan_lifecycle);
+				return;
+			}
+			bt_scanner_started = 1;
+			bt_scanner_failed = 0;
+		}
+		bt_scan_requested = 1;
+		bt_needs_refresh = 1;
+	}
+	pthread_mutex_unlock(&bt_scan_lifecycle);
 }
 
 // ============================================
@@ -381,7 +416,6 @@ static int device_info_count = 0;
 
 static void* bt_scanner(void* arg) {
 	SettingsPage* page = (SettingsPage*)arg;
-	int discovery_started = 0;
 
 	while (bt_scanner_running) {
 		bt_needs_refresh = 0;
@@ -393,24 +427,33 @@ static void* bt_scanner(void* arg) {
 			device_info_count = 0;
 			page->needs_layout = 1;
 			pthread_rwlock_unlock(&page->lock);
-			discovery_started = 0;
+			pthread_mutex_lock(&bt_scan_lifecycle);
+			bt_scan_requested = 1; // One scan when Bluetooth is enabled again.
+			pthread_mutex_unlock(&bt_scan_lifecycle);
 			bt_sleep(2);
 			continue;
 		}
 
-		// Start discovery if not already running
-		if (!discovery_started) {
+		pthread_mutex_lock(&bt_scan_lifecycle);
+		if (bt_scanner_running && bt_scan_requested && !bt_toggle_ctx.busy) {
+			bt_scan_requested = 0;
 			BT_discovery(1);
-			discovery_started = 1;
 		}
+		pthread_mutex_unlock(&bt_scan_lifecycle);
+		if (!bt_scanner_running)
+			break;
 
 		// Get paired devices
 		struct BT_devicePaired paired[32];
 		int paired_count = BT_pairedDevices(paired, 32);
+		if (!bt_scanner_running)
+			break;
 
 		// Get available (unpaired) devices
 		struct BT_device available[32];
 		int avail_count = BT_availableDevices(available, 32);
+		if (!bt_scanner_running)
+			break;
 
 		// Save selected addr for restoration
 		char selected_addr[18] = "";
@@ -528,16 +571,30 @@ static void bt_on_show(SettingsPage* page) {
 	settings_item_sync(&page->items[BT_IDX_DIAG]);
 
 	// Start scanner thread
+	pthread_mutex_lock(&bt_scan_lifecycle);
 	bt_page_ref = page;
+	bt_scan_requested = 1;
+	bt_scanner_failed = 0;
 	bt_scanner_running = 1;
-	bt_scanner_started = 1;
-	pthread_create(&bt_scanner_thread, NULL, bt_scanner, page);
+	if (pthread_create(&bt_scanner_thread, NULL, bt_scanner, page) == 0)
+		bt_scanner_started = 1;
+	else {
+		bt_scanner_running = 0;
+		bt_scanner_failed = 1;
+		bt_scan_requested = 0;
+	}
+	pthread_mutex_unlock(&bt_scan_lifecycle);
 }
 
 static void bt_on_hide(SettingsPage* page) {
 	(void)page;
+	pthread_mutex_lock(&bt_scan_lifecycle);
 	bt_scanner_running = 0;
+	bt_scan_requested = 0;
+	// Stop the owned radio client promptly; do not join inventory queries here.
+	BT_discovery(0);
 	bt_page_ref = NULL;
+	pthread_mutex_unlock(&bt_scan_lifecycle);
 }
 
 static void bt_on_tick(SettingsPage* page) {
@@ -549,15 +606,40 @@ static void bt_on_tick(SettingsPage* page) {
 			page->selected = vis - 1;
 	}
 
-	// Show scanning hint when BT is on but no devices listed yet
+	int state = BT_discoveryState();
+	pthread_mutex_lock(&bt_scan_lifecycle);
+	int pending = bt_scan_requested;
+	pthread_mutex_unlock(&bt_scan_lifecycle);
+	bool enabled = BT_enabled();
+	bool scanning = state == BT_DISCOVERY_ACTIVE;
+	bool waiting = pending || state == BT_DISCOVERY_STARTING;
+	SettingItem* scan = &page->items[BT_IDX_SCAN];
+	scan->type = enabled && !waiting && !scanning && !bt_toggle_ctx.busy
+		? ITEM_BUTTON : ITEM_STATIC;
+	scan->desc = scanning ? "Wait for this scan to finish"
+		: "Put your device in pairing mode, then scan again";
+
+	// Pairing failures take priority over discovery progress and completion.
 	if (bt_action_ctx.done && bt_pair_result != BT_PAIR_OK) {
 		page->status_msg = bt_pair_result == BT_PAIR_FAILED
 			? "Pairing failed. Put device in pairing mode and retry."
 			: bt_pair_result == BT_PAIR_TRUST_FAILED
 			? "Paired, but automatic reconnection setup failed."
 			: "Paired, but connection failed. Retry Connect.";
-	} else if (BT_enabled() && page->dynamic_start >= 0 && page->item_count <= page->dynamic_start) {
+	} else if (!enabled) {
+		page->status_msg = NULL;
+	} else if (scanning) {
 		page->status_msg = "Scanning for devices...";
+	} else if (waiting) {
+		page->status_msg = "Starting scan...";
+	} else if (bt_scanner_failed || state == BT_DISCOVERY_FAILED) {
+		page->status_msg = "Could not start scan. Select Scan again to retry.";
+	} else if (state == BT_DISCOVERY_INTERRUPTED || state == BT_DISCOVERY_STOPPED) {
+		page->status_msg = "Scan stopped early. Select Scan again to retry.";
+	} else if (state == BT_DISCOVERY_COMPLETE) {
+		page->status_msg = page->item_count > page->dynamic_start
+			? "Scan complete"
+			: "No devices found. Put your device in pairing mode and scan again.";
 	} else {
 		page->status_msg = NULL;
 	}
@@ -573,6 +655,7 @@ SettingsPage* bt_page_create(void) {
 		return NULL;
 	page->title = "Settings | Bluetooth";
 	page->is_list = 0;
+	page->status_in_description = 1;
 	page->dynamic_start = BT_STATIC_COUNT;
 	page->max_items = BT_MAX_ITEMS;
 	page->items = calloc(BT_MAX_ITEMS, sizeof(SettingItem));
@@ -607,6 +690,14 @@ SettingsPage* bt_page_create(void) {
 		.set_value = bt_set_diag,
 	};
 
+	page->items[BT_IDX_SCAN] = (SettingItem){
+		.name = "Scan again",
+		.desc = "Put your device in pairing mode, then scan again",
+		.type = ITEM_STATIC,
+		.visible = 1,
+		.on_press = bt_scan_again,
+	};
+
 	page->item_count = BT_STATIC_COUNT;
 
 	page->on_show = bt_on_show;
@@ -619,6 +710,6 @@ SettingsPage* bt_page_create(void) {
 void bt_page_destroy(SettingsPage* page) {
 	if (!page)
 		return;
-	bt_scanner_running = 0;
-	// Don't join or wait — process exit cleans up all threads and memory
+	bt_on_hide(page);
+	// Inventory worker finishes without holding up page exit.
 }

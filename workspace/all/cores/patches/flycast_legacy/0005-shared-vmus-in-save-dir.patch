@@ -1,0 +1,75 @@
+# license: modifies Flycast (https://github.com/libretro/flycast), GPL-2.0 (LICENSE); this patch is distributed under the same license.
+diff --git a/core/stdclass.cpp b/core/stdclass.cpp
+--- a/core/stdclass.cpp
++++ b/core/stdclass.cpp
+@@ -7,6 +7,7 @@
+ #include <io.h>
+ #else
+ #include <unistd.h>
++#include <fcntl.h>
+ #endif
+ 
+ #include "hw/mem/_vmem.h"
+@@ -74,7 +75,60 @@
+    }
+    else
+    {
+-      sprintf(filename, "vmu_save_%s.bin", logical_port);
+-      return get_writable_data_path(filename);
++      // NX Redux (shared with nx-mobile): a shared card (every port when
++      // per-game cards are off, the ports after A1 with "VMU A1") is a save
++      // too, so it lives in the save directory (Saves/DCX) and syncs with the
++      // other saves. This core reads and writes one path, so a card still in
++      // the system folder from an earlier run is copied over first (through a
++      // synced temp file, so a half-copied card never wins) and keeps the old
++      // file's modification time (sync's newer-wins then compares when it was
++      // last played, not when it moved); the old file is left where it is as a
++      // recovery copy, never read again once the new one exists. If the copy
++      // fails the old card stays in use rather than starting a blank one.
++      snprintf(filename, sizeof(filename), "vmu_save_%s.bin", logical_port);
++      std::string inSaves = std::string(vmu_dir_no_slash) +
++#ifdef _WIN32
++         std::string("\\")
++#else
++         std::string("/")
++#endif
++         + filename;
++      std::string inSystem = get_writable_data_path(filename);
++      struct stat st, old;
++      if (stat(inSaves.c_str(), &st) == 0 || stat(inSystem.c_str(), &old) != 0)
++         return inSaves;
++      std::string tmp = inSaves + ".tmp";
++      bool ok = false;
++      FILE *in = fopen(inSystem.c_str(), "rb");
++      FILE *out = in ? fopen(tmp.c_str(), "wb") : NULL;
++      if (out)
++      {
++         char buf[16384];
++         size_t n;
++         ok = true;
++         while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
++            if (fwrite(buf, 1, n, out) != n)
++               ok = false;
++         if (ferror(in) || fflush(out) != 0)
++            ok = false;
++#ifndef _WIN32
++         if (ok && fsync(fileno(out)) != 0)
++            ok = false;
++#endif
++         if (fclose(out) != 0)
++            ok = false;
++      }
++      if (in)
++         fclose(in);
++      if (ok && rename(tmp.c_str(), inSaves.c_str()) == 0)
++      {
++#ifdef __linux__
++         struct timespec times[2] = { old.st_atim, old.st_mtim };
++         utimensat(AT_FDCWD, inSaves.c_str(), times, 0);
++#endif
++         return inSaves;
++      }
++      remove(tmp.c_str());
++      return inSystem;
+    }
+ }

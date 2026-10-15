@@ -10,6 +10,7 @@ GENERIC = (ROOT / 'workspace/all/common/generic_bt.c').read_text()
 SETTINGS = (ROOT / 'workspace/all/settings/settings_bt.c').read_text()
 ENUM = '''enum { BT_DISCOVERY_IDLE, BT_DISCOVERY_STARTING, BT_DISCOVERY_ACTIVE,
 BT_DISCOVERY_COMPLETE, BT_DISCOVERY_FAILED, BT_DISCOVERY_INTERRUPTED, BT_DISCOVERY_STOPPED };'''
+LIST_LAYOUT = (ROOT / 'workspace/all/common/ui_list_layout.h').read_text()
 HEADERS = '''#define _DEFAULT_SOURCE
 #include <assert.h>
 #include <stdbool.h>
@@ -343,6 +344,53 @@ int main(void){
  for(int i=0;i<4;i++){page.status_msg=messages[i];expected_desc=messages[i];expected_status=NULL;render_settings_mode(NULL,&page,&layout);}
  page.status_in_description=0;expected_desc="Normal description";expected_status=page.status_msg;render_settings_mode(NULL,&page,&layout);
  assert(renders==5);return 0;
+}
+'''
+        self.run_c(harness)
+
+    def test_completed_device_list_keeps_titled_settings_layout(self):
+        menu = (ROOT / 'workspace/all/settings/settings_menu.c').read_text()
+        render = menu[menu.index('void settings_menu_render('):]
+        harness = HEADERS + LIST_LAYOUT + r'''
+typedef int IndicatorType;
+typedef void SDL_Surface;
+typedef struct {int titled;} ListLayout;
+typedef struct SettingsPage {const char* title;int dynamic_start,is_list,top_aligned;pthread_rwlock_t lock;} SettingsPage; // top_aligned is a legacy regression sentinel, not a production field.
+static SettingsPage page;
+static int title_calls,hint_calls,settings_calls;
+static int captured_titled;
+static void assert_shared_wireless_layout(void){
+ UIListBlock wifi=UI_optionsBlock(57,702,67,2+2,26,-1);
+ UIListBlock bt=UI_optionsBlock(57,702,67,3+2,26,-1);
+ assert(wifi.rows==4 && wifi.strip==0 && bt.rows==5 && bt.strip==0);
+ int wifi_top_gap=wifi.top-57,wifi_bottom_gap=702-(wifi.top+wifi.rows*67);
+ int bt_top_gap=bt.top-57,bt_bottom_gap=702-(bt.top+bt.rows*67);
+ assert(wifi_top_gap-wifi_bottom_gap<=1 && wifi_bottom_gap-wifi_top_gap<=1);
+ assert(bt_top_gap-bt_bottom_gap<=1 && bt_bottom_gap-bt_top_gap<=1);
+ assert(wifi.top!=bt.top); // Each page centers its own row count.
+ wifi=UI_optionsBlock(57,702,67,2+12,26,-1);
+ bt=UI_optionsBlock(57,702,67,3+12,26,-1);
+ assert(wifi.rows==8 && bt.rows==8 && wifi.strip==26 && bt.strip==26);
+}
+static SettingsPage* settings_menu_current(void){return &page;}
+static void GFX_clear(SDL_Surface*s){(void)s;}
+static void UI_renderMenuBar(SDL_Surface*s,const char*t){(void)s;assert(strcmp(t,"Bluetooth")==0);title_calls++;}
+static ListLayout UI_calcListLayout(SDL_Surface*s){(void)s;return (ListLayout){.titled=1};}
+static void render_list_mode(SDL_Surface*s,SettingsPage*p,ListLayout*l){(void)s;(void)p;(void)l;assert(0);}
+static void render_settings_mode(SDL_Surface*s,SettingsPage*p,ListLayout*l){(void)s;(void)p;captured_titled=l->titled;assert_shared_wireless_layout();settings_calls++;}
+static void render_hints_for_page(SDL_Surface*s,SettingsPage*p){(void)s;(void)p;hint_calls++;}
+''' + render + r'''
+int main(void){
+ page=(SettingsPage){.title="Bluetooth",.dynamic_start=0,.top_aligned=0};
+ assert(pthread_rwlock_init(&page.lock,NULL)==0);
+ settings_menu_render(NULL,0);
+ assert(captured_titled && title_calls==1 && hint_calls==1 && settings_calls==1);
+ // Simulate the former completion state: discovered device rows can make
+ // the page's layout sentinel true, but the titled shared layout stays active.
+ page.top_aligned=1;
+ settings_menu_render(NULL,0);
+ assert(captured_titled && title_calls==2 && hint_calls==2 && settings_calls==2);
+ pthread_rwlock_destroy(&page.lock);return 0;
 }
 '''
         self.run_c(harness)

@@ -1,6 +1,19 @@
 #!/bin/sh
 # Taken from allwinner/btmanager/config/xradio_bt_init.sh for NXRedux
 bt_hciattach="hciattach"
+BT_RECONNECT_HELPER="$(dirname "$0")/bt_reconnect.sh"
+# launch.sh copies this file alone to /etc; use the SD helper after reboot.
+[ -r "$BT_RECONNECT_HELPER" ] || BT_RECONNECT_HELPER="${SYSTEM_PATH:-/mnt/SDCARD/.system}/etc/bluetooth/bt_reconnect.sh"
+if [ -r "$BT_RECONNECT_HELPER" ]; then
+	. "$BT_RECONNECT_HELPER"
+else
+	# Reconnect is optional; missing SD state must never suppress shutdown.
+	bt_toggle_begin() { return 1; }
+	bt_capture_audio() { return 0; }
+	bt_token_current() { return 1; }
+	bt_prepare_reconnect() { return 1; }
+	bt_daemon_identity() { return 1; }
+fi
 TRIMUI_MODEL=`strings /usr/trimui/bin/MainUI | grep ^Trimui`
 DEVICE_NAME="$TRIMUI_MODEL (NX Redux)"
 
@@ -20,7 +33,7 @@ start_hci_attach() {
 	echo 1 > /proc/bluetooth/sleep/btwrite
 	reset_bluetooth_power
 
-	"$bt_hciattach" -n ttyS1 xradio >/dev/null 2>&1 &
+	(exec 9>&-; "$bt_hciattach" -n ttyS1 xradio) >/dev/null 2>&1 &
 
 	wait_hci0_count=0
 	while true
@@ -36,6 +49,7 @@ start_hci_attach() {
 }
 
 start_bt() {
+	BT_DAEMON_STARTED=0
 	rfkill.elf unblock bluetooth
 
 	if [ -d "/sys/class/bluetooth/hci0" ];then
@@ -47,14 +61,15 @@ start_bt() {
 	# Start bluetooth daemon if not running
     d=`ps | grep bluetoothd | grep -v grep`
 	[ -z "$d" ] && {
-		/etc/bluetooth/bluetoothd start
+		(exec 9>&-; /etc/bluetooth/bluetoothd start)
+		BT_DAEMON_STARTED=1
 		sleep 1
     }
 
 	a=`ps | grep bluealsa | grep -v grep`
 	[ -z "$a" ] && {
 		# bluealsa -p a2dp-source --keep-alive=-1 &
-		bluealsa -p a2dp-source &
+		(exec 9>&-; bluealsa -p a2dp-source) &
 		sleep 1
 		# Power on adapter
 		bluetoothctl power on 2>/dev/null
@@ -71,6 +86,13 @@ start_bt() {
 		bluetoothctl system-alias "$DEVICE_NAME" 2>/dev/null
     }
 
+}
+
+start_reconnect_worker() {
+	[ "$BT_DAEMON_STARTED" -eq 1 ] && bt_prepare_reconnect &&
+		bt_daemon_identity && bt_token_current || return 0
+	(exec 9>&-; sh "$BT_RECONNECT_HELPER" reconnect_worker "$BT_RECONNECT_TOKEN" \
+		"$BT_RECONNECT_TARGET" "$BT_DAEMON_IDENTITY") >/dev/null 2>&1 &
 }
 
 ble_start() {
@@ -101,6 +123,7 @@ ble_start() {
 }
 
 stop_bt() {
+	bt_capture_audio
 	# stop bluealsa
 	killall bluealsa 2>/dev/null
 
@@ -148,16 +171,56 @@ stop_bt() {
 }
 
 case "$1" in
+	stop|restart)
+		# BusyBox ash can exit on a failed exec redirection while opening the
+		# lifecycle lock. Even then, the physical stack shutdown must run.
+		trap 'stop_bt' 0
+		;;
+esac
+
+case "$1" in
+	start|stop|restart)
+		if bt_toggle_begin; then
+			:
+		else
+			bt_begin_status=$?
+			# Superseded requests stop here. A failed lock/state check must
+			# never suppress shutdown; startup fails closed so an old worker
+			# cannot race a newly started daemon without lifecycle locking.
+			if [ "$bt_begin_status" -eq 2 ]; then
+				# A newer request owns this lifecycle; do not run our EXIT trap.
+				trap - 0
+				exit 0
+			fi
+			BT_RECONNECT_DISABLED=1
+		fi
+		;;
+esac
+
+case "$1" in
 	start)
+		if [ "${BT_RECONNECT_DISABLED:-0}" -ne 0 ]; then
+			echo "Bluetooth start blocked: reconnect lifecycle state unavailable" >&2
+			exit 1
+		fi
 		start_bt
+		start_reconnect_worker
 		;;
 	stop)
 		stop_bt
+		trap - 0
 		;;
 	restart)
 		stop_bt
+		trap - 0
+		if [ "${BT_RECONNECT_DISABLED:-0}" -ne 0 ]; then
+			echo "Bluetooth restart stopped; startup blocked: reconnect lifecycle state unavailable" >&2
+			exit 1
+		fi
 		sleep 0.5
 		start_bt
+		BT_RECONNECT_PREVIOUS_TOKEN=$BT_RECONNECT_TOKEN
+		start_reconnect_worker
 		;;
   *)
 		echo "Usage: $0 {start|stop|restart}"

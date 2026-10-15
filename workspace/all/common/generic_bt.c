@@ -481,7 +481,7 @@ void PLAT_bluetoothEnable(bool shouldBeOn) {
 		// On tg5050 (separate WiFi/BT chips), keep bluetoothd running and
 		// just power off the adapter so bluetoothctl commands don't hang.
 		if (strcmp(PLATFORM, "tg5040") == 0) {
-			bt_system("bluetoothctl power off 2>/dev/null");
+			// bt_init.sh captures the active audio device before powering down.
 			system(SYSTEM_PATH "/etc/bluetooth/bt_init.sh stop");
 		} else {
 			bt_system("bluetoothctl power off 2>/dev/null");

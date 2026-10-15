@@ -287,7 +287,7 @@ enum { BT_DISCOVERY_IDLE, BT_DISCOVERY_STARTING, BT_DISCOVERY_ACTIVE,
 typedef struct { int type; const char* desc; } SettingItem;
 typedef struct {
  void* screen; int needs_layout, selected, dynamic_start, item_count;
- SettingItem items[4]; const char* status_msg;
+ SettingItem items[4]; int status_in_description; const char* status_msg;
 } SettingsPage;
 static SettingsPage page={.screen=(void*)1,.dynamic_start=4,.item_count=4};
 static volatile int bt_boot_value;
@@ -320,12 +320,11 @@ int main(void) {
  bt_set_boot(1);
  assert(bt_action_ctx.done==0 && sync_count==1);
  bt_on_tick(&page);
- assert(strcmp(page.status_msg,"Could not save boot reconnect setting. Retry.")==0);
+ assert(strcmp(page.status_msg,"Could not save boot reconnect setting. Retry.")==0 && page.status_in_description);
  assert(sync_count==2 && bt_boot_ctx.handled==1);
  async_mode=1; sync_count=0; bt_boot_ctx.result=0;
  bt_set_boot(0); bt_on_tick(&page);
- assert(bt_boot_ctx.done && bt_boot_ctx.result==-1);
- assert(strcmp(page.status_msg,"Could not save boot reconnect setting. Retry.")==0);
+ assert(bt_boot_ctx.done && bt_boot_ctx.result==-1 && page.status_in_description);
  assert(sync_count==2);
  async_mode=2; save_result=0; enabled_value=1; sync_count=0;
  bt_boot_ctx.done=0; bt_set_boot(1);

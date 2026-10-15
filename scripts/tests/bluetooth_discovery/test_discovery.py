@@ -240,7 +240,7 @@ typedef int BluetoothDeviceType;
 struct BT_devicePaired {char remote_name[249],remote_addr[18];int is_bonded,is_connected;};
 struct BT_device {char name[249],addr[18];int kind;};
 typedef struct SettingItem {const char* name;const char* desc;int type,visible;void(*on_press)(void);void(*custom_draw)(void);void* user_data;} SettingItem;
-typedef struct SettingsPage {SettingItem* items;int item_count,dynamic_start,max_items,selected,needs_layout;pthread_rwlock_t lock;const char* status_msg;} SettingsPage;
+typedef struct SettingsPage {SettingItem* items;int item_count,dynamic_start,max_items,selected,needs_layout,status_in_description;pthread_rwlock_t lock;const char* status_msg;} SettingsPage;
 static struct {int val; volatile int done,busy;} bt_toggle_ctx;
 static volatile int bt_boot_value;
 static struct {int val; volatile int done,busy,result; int handled;} bt_boot_ctx;
@@ -281,21 +281,29 @@ int main(void) {
  SettingItem items[BT_MAX_ITEMS]={0}; SettingsPage page={.items=items,.dynamic_start=4,.item_count=4,.max_items=BT_MAX_ITEMS};
  pthread_rwlock_init(&page.lock,NULL); bt_on_show(&page); await_starts(1);
  state=BT_DISCOVERY_ACTIVE; tick(&page);
- assert(strcmp(page.status_msg,"Scanning for devices...")==0 && items[3].type==ITEM_STATIC);
+ assert(strcmp(page.status_msg,"Scanning for devices...")==0 && !page.status_in_description && items[3].type==ITEM_STATIC);
  bt_scan_again(); assert(!bt_scan_requested);
  state=BT_DISCOVERY_COMPLETE; usleep(200000); assert(starts==1 && refreshes>1);
- tick(&page); assert(strcmp(page.status_msg,"Scan complete")==0 && items[3].type==ITEM_BUTTON);
+ tick(&page); assert(strcmp(page.status_msg,"Scan complete")==0 && !page.status_in_description && items[3].type==ITEM_BUTTON);
  assert(page.item_count==5); // Cached result survives completion and new scan.
  bt_scan_again(); bt_scan_again(); await_starts(2); assert(page.item_count==5);
- tick(&page); assert(strcmp(page.status_msg,"Starting scan...")==0);
+ tick(&page); assert(strcmp(page.status_msg,"Starting scan...")==0 && !page.status_in_description);
  state=BT_DISCOVERY_ACTIVE; bt_action_ctx.done=1;bt_pair_result=BT_PAIR_FAILED;
- tick(&page); assert(strstr(page.status_msg,"Pairing failed"));
+ tick(&page); assert(strstr(page.status_msg,"Pairing failed") && page.status_in_description);
+ bt_action_ctx.done=0; tick(&page);
+ assert(strcmp(page.status_msg,"Scanning for devices...")==0 && !page.status_in_description);
  bt_action_ctx.done=0; state=BT_DISCOVERY_COMPLETE;
  pthread_rwlock_wrlock(&page.lock);page.item_count=4;bt_on_tick(&page);
- assert(strcmp(page.status_msg,"No devices found. Put your device in pairing mode and scan again.")==0);
+ assert(strcmp(page.status_msg,"No devices found. Put your device in pairing mode and scan again.")==0 && page.status_in_description);
  pthread_rwlock_unlock(&page.lock);
- state=BT_DISCOVERY_FAILED; bt_scan_again(); tick(&page);
- assert(strcmp(page.status_msg,"Starting scan...")==0); await_starts(3);
+ state=BT_DISCOVERY_FAILED; tick(&page);
+ assert(strcmp(page.status_msg,"Could not start scan. Select Scan again to retry.")==0 && page.status_in_description);
+ bt_scan_again(); tick(&page);
+ assert(strcmp(page.status_msg,"Starting scan...")==0 && !page.status_in_description); await_starts(3);
+ state=BT_DISCOVERY_INTERRUPTED; tick(&page);
+ assert(strcmp(page.status_msg,"Scan stopped early. Select Scan again to retry.")==0 && page.status_in_description);
+ state=BT_DISCOVERY_ACTIVE; tick(&page);
+ assert(strcmp(page.status_msg,"Scanning for devices...")==0 && !page.status_in_description);
  // Enable completion queues a scan even when the inventory worker missed Off.
  bt_toggle_ctx.val=1; bt_toggle_thread(NULL); await_starts(4);
  block_inventory=1; usleep(100000); int before=starts;
@@ -343,11 +351,19 @@ static void UI_renderSettingsPage(SDL_Surface*s,ListLayout*l,UISettingsItem*i,in
 ''' + render + r'''
 int main(void){
  SettingItem items[14];for(int i=0;i<14;i++)items[i]=(SettingItem){.name="Device",.desc="Normal description"};
- const char* messages[]={"Scanning for devices...","Scan complete","No devices found. Put your device in pairing mode and scan again.","Pairing failed. Put device in pairing mode and retry."};
+ const char* messages[]={"Scanning for devices...","Scan complete","No devices found. Put your device in pairing mode and scan again.","Pairing failed. Put device in pairing mode and retry.","Could not save boot reconnect setting. Retry."};
+ const int in_description[]={0,0,1,1,1};
  SettingsPage page={.items=items,.item_count=14,.selected=12,.scroll=9,.status_in_description=1};ListLayout layout;
- for(int i=0;i<4;i++){page.status_msg=messages[i];expected_desc=messages[i];expected_status=NULL;render_settings_mode(NULL,&page,&layout);}
- page.status_in_description=0;expected_desc="Normal description";expected_status=page.status_msg;render_settings_mode(NULL,&page,&layout);
- assert(renders==5);return 0;
+ for(int i=0;i<5;i++){
+  page.status_msg=messages[i];page.status_in_description=in_description[i];
+  expected_desc=in_description[i]?messages[i]:"Normal description";
+  expected_status=in_description[i]?NULL:messages[i];
+  render_settings_mode(NULL,&page,&layout);
+ }
+ // A routine state after an error must restore the selected row's own help.
+ page.status_msg=messages[0];page.status_in_description=0;
+ expected_desc="Normal description";expected_status=messages[0];render_settings_mode(NULL,&page,&layout);
+ assert(renders==6);return 0;
 }
 '''
         self.run_c(harness)

@@ -645,6 +645,9 @@ static void bt_on_hide(SettingsPage* page) {
 }
 
 static void bt_on_tick(SettingsPage* page) {
+	// Routine progress belongs in the below-list status area. Promote only
+	// errors and no-device guidance into the selected row's wrapped help.
+	page->status_in_description = 0;
 	if (bt_boot_ctx.done && !bt_boot_ctx.handled) {
 		settings_item_sync(&page->items[BT_IDX_BOOT]);
 		bt_boot_ctx.handled = 1;
@@ -672,12 +675,14 @@ static void bt_on_tick(SettingsPage* page) {
 
 	// Pairing failures take priority over discovery progress and completion.
 	if (bt_action_ctx.done && bt_pair_result != BT_PAIR_OK) {
+		page->status_in_description = 1;
 		page->status_msg = bt_pair_result == BT_PAIR_FAILED
 			? "Pairing failed. Put device in pairing mode and retry."
 			: bt_pair_result == BT_PAIR_TRUST_FAILED
 			? "Paired, but automatic reconnection setup failed."
 			: "Paired, but connection failed. Retry Connect.";
 	} else if (bt_boot_ctx.done && bt_boot_ctx.result != 0) {
+		page->status_in_description = 1;
 		page->status_msg = "Could not save boot reconnect setting. Retry.";
 	} else if (!enabled) {
 		page->status_msg = NULL;
@@ -686,13 +691,18 @@ static void bt_on_tick(SettingsPage* page) {
 	} else if (waiting) {
 		page->status_msg = "Starting scan...";
 	} else if (bt_scanner_failed || state == BT_DISCOVERY_FAILED) {
+		page->status_in_description = 1;
 		page->status_msg = "Could not start scan. Select Scan again to retry.";
 	} else if (state == BT_DISCOVERY_INTERRUPTED || state == BT_DISCOVERY_STOPPED) {
+		page->status_in_description = 1;
 		page->status_msg = "Scan stopped early. Select Scan again to retry.";
 	} else if (state == BT_DISCOVERY_COMPLETE) {
-		page->status_msg = page->item_count > page->dynamic_start
-			? "Scan complete"
-			: "No devices found. Put your device in pairing mode and scan again.";
+		if (page->item_count > page->dynamic_start) {
+			page->status_msg = "Scan complete";
+		} else {
+			page->status_in_description = 1;
+			page->status_msg = "No devices found. Put your device in pairing mode and scan again.";
+		}
 	} else {
 		page->status_msg = NULL;
 	}
@@ -708,7 +718,6 @@ SettingsPage* bt_page_create(void) {
 		return NULL;
 	page->title = "Settings | Bluetooth";
 	page->is_list = 0;
-	page->status_in_description = 1;
 	page->dynamic_start = BT_STATIC_COUNT;
 	page->max_items = BT_MAX_ITEMS;
 	page->items = calloc(BT_MAX_ITEMS, sizeof(SettingItem));

@@ -33,9 +33,10 @@ replace BlueZ link-loss policy or establish that a particular headset will recon
 The implementation selectively reuses
 [PR #233 at 54272251](https://github.com/mohammadsyuhada/nx-redux/tree/54272251466caade3877b8d527c8411728316ba4):
 exact property/MAC checks, bounded CLI execution, volatile state, and a short
-post-restart retry window. The old patch series is not applied. Boot preferences,
-boot recall, temporary pairing, and automatic Disconnect cancellation are excluded.
-Existing saved bonds and the controller path are unchanged.
+post-restart retry window. The old patch series is not applied. The restart-only
+path excludes boot recall, temporary pairing, and automatic Disconnect cancellation.
+The separate opt-in boot path below reuses the bounded worker. Existing saved
+bonds and the controller path are unchanged.
 
 A stop captures exactly one connected, bonded, trusted Audio Sink before adapter
 power-off or daemon termination. HID devices, including devices advertising both
@@ -57,8 +58,35 @@ current-generation check and Connect against a cooperating restart; daemon ident
 also binds the worker to the stack it was launched for. Shutdown proceeds even when
 state preparation or lock acquisition fails. Startup requires that lock and fails
 if it cannot be acquired, preventing an old worker from targeting a replacement
-daemon. Repair the helper/state failure and retry startup. State stays under /tmp;
-no saved pairing or persistent reconnect preference is written.
+daemon. Repair the helper/state failure and retry startup. Restart capture state
+stays under /tmp; that path writes no saved pairing or persistent preference.
+
+## Opt-in boot recall
+
+On tg5040, Boot reconnect is Off by default. Enabling it in Bluetooth settings
+saves a preferred, bonded and trusted Audio Sink when there is exactly one eligible
+connected headset; a later verified Pair or Connect can update that target. HID
+controllers, including devices advertising both HID and Audio Sink, are excluded.
+Unpair clears a matching target. The preference is stored in
+`.userdata/tg5040/bt-boot-audio`; no new bond or temporary pairing is created.
+
+The launcher offers one boot recall opportunity per boot, even if Bluetooth is
+Off, the preference is Off, or no target is saved at that moment. Changing the
+setting afterward takes effect on the next boot; entering the launcher again
+does not schedule another attempt. Manual Bluetooth actions cancel a pending boot
+attempt. A connected second headset suppresses recall; an unavailable target
+gets at most two Connect attempts within 30 seconds. The worker checks its current
+generation, daemon identity, preference, and cancellation under the lifecycle
+lock before Connect. It does not automatically Disconnect any device. This boot
+path does not change the separate stop/start recall behavior described above.
+Cancellation stops subsequent attempts, but a Connect already submitted to BlueZ
+may still complete.
+
+These are host-verified policy and process bounds. This commit has no headset
+hardware boot trial, so actual radio reconnection and audible playback at boot
+remain unverified.
+
+## Restart hardware acceptance
 
 On the observed tg5040 firmware, BusyBox 1.27.2 `pgrep -x bluetoothd` missed a
 running daemon because its match used `/usr/bin/bluetoothd`; `pidof bluetoothd`
@@ -74,9 +102,11 @@ cases remain untested.
 
 ## Verification
 
-Run `python3 scripts/tests/bluetooth_reconnect/test_reconnect.py` from the repository.
+Run `python3 scripts/tests/bluetooth_reconnect/test_reconnect.py` and
+`python3 scripts/tests/bluetooth_reconnect/test_boot.py` from the repository.
 The tests cover selection, capture ordering, one-shot consumption, bounds, stale
-workers, controller exclusion, and shutdown failure paths. They are deterministic
+workers, controller exclusion, shutdown failure paths, boot preference parsing,
+first-opportunity consumption, cancellation, and Settings status. They are deterministic
 host tests, not a measurement of radio range, headset availability, audible audio,
 actual suspend success, or firmware tool compatibility. Those require hardware
 acceptance checks; the scoped device results above are separate from this suite.

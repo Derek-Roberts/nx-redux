@@ -28,6 +28,9 @@ enum { BT_PAIR_OK=0, BT_PAIR_FAILED=-1, BT_PAIR_TRUST_FAILED=-2, BT_PAIR_CONNECT
 struct BT_devicePaired { char remote_addr[18], remote_name[249]; bool is_bonded, is_connected; int rssi; };
 static int scenario, trust_calls, connect_calls, removed, pair_long_calls, connect_long_calls;
 static char timeout_warning[256];
+static int boot_cancel_calls, boot_remember_calls;
+static void bt_cancel_boot(void) { boot_cancel_calls++; }
+static void bt_remember_boot(const char* addr) { assert(strcmp(addr,"AA:BB:CC:DD:EE:FF")==0); boot_remember_calls++; }
 static bool pairable = true;
 static int enable_calls, disable_calls;
 
@@ -97,6 +100,7 @@ int main(void) {
  scenario=0; pair_long_calls=connect_long_calls=0;
  assert(PLAT_bluetoothPair(addr)==BT_PAIR_OK);
  assert(pair_long_calls==1 && connect_long_calls==1);
+ assert(boot_remember_calls==1 && boot_cancel_calls>0);
  scenario=6; trust_calls=connect_calls=removed=0; assert(PLAT_bluetoothPair(addr)==BT_PAIR_FAILED); assert(!trust_calls && !connect_calls && !removed);
  assert(enable_calls==0 && disable_calls==0); // Already pairable: preserve state.
  for(scenario=7;scenario<=13;scenario++) {
@@ -190,6 +194,9 @@ int main(void) {
 #define LOG_warn(...) snprintf(warning, sizeof(warning), __VA_ARGS__)
 static int result, calls, errors;
 static char warning[256];
+static int boot_cancels, boot_remembers;
+static void bt_cancel_boot(void) { boot_cancels++; }
+static void bt_remember_boot(const char* addr) { assert(strcmp(addr,"AA:BB:CC:DD:EE:FF")==0); boot_remembers++; }
 static int bt_run_cmd_long(const char* cmd, char* out, size_t len) {
  // A second call (including Disconnect) or a different target is forbidden.
  assert(strcmp(cmd,"bluetoothctl connect AA:BB:CC:DD:EE:FF 2>&1")==0);
@@ -204,6 +211,7 @@ int main(void) {
  result=BT_CMD_TIMED_OUT;
  PLAT_bluetoothConnect(addr);
  assert(calls==1 && errors==1);
+ assert(boot_cancels==1 && boot_remembers==0);
  assert(strstr(warning,"BlueZ request may still complete"));
  result=-1;
  warning[0]=0;
@@ -212,6 +220,7 @@ int main(void) {
  result=0;
  PLAT_bluetoothConnect(addr);
  assert(calls==3 && errors==2 && warning[0]==0);
+ assert(boot_cancels==3 && boot_remembers==1);
  return 0;
 }
 '''
@@ -254,6 +263,8 @@ int main(void) {
 enum { BT_PAIR_OK=0, BT_PAIR_FAILED=-1, BT_PAIR_TRUST_FAILED=-2, BT_PAIR_CONNECT_FAILED=-3 };
 static bool bt_daemon_alive(void) { return true; }
 static void bt_remove_discovered_device(char* addr) { (void)addr; }
+static void bt_cancel_boot(void) {}
+static void bt_remember_boot(const char* addr) { (void)addr; }
 static int bt_run_cmd(const char* cmd, char* out, size_t len) {
  snprintf(out,len,"Pairable: yes\nPaired: yes\nBonded: yes\n"); return 0;
 }

@@ -1095,6 +1095,9 @@ bool PLAT_hasBluetooth();
 // \sa PLAT_bluetoothEnable
 bool PLAT_bluetoothEnabled();
 void PLAT_bluetoothEnable(bool on);
+bool PLAT_bluetoothBootReconnectSupported();
+bool PLAT_bluetoothBootReconnectEnabled();
+int PLAT_bluetoothBootReconnectEnable(bool on);
 // enable bt diagnostic logging
 bool PLAT_bluetoothDiagnosticsEnabled();
 // returns true if diagnostic logging is enabled
@@ -1139,6 +1142,9 @@ void PLAT_bluetoothSetVolume(int vol);
 #define BT_supported PLAT_hasBluetooth
 #define BT_enabled PLAT_bluetoothEnabled
 #define BT_enable PLAT_bluetoothEnable
+#define BT_bootReconnectSupported PLAT_bluetoothBootReconnectSupported
+#define BT_bootReconnectEnabled PLAT_bluetoothBootReconnectEnabled
+#define BT_bootReconnectEnable PLAT_bluetoothBootReconnectEnable
 #define BT_diagnosticsEnabled PLAT_bluetoothDiagnosticsEnabled
 #define BT_diagnosticsEnable PLAT_bluetoothDiagnosticsEnable
 #define BT_discovery PLAT_bluetoothDiscovery

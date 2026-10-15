@@ -1,9 +1,13 @@
 #!/bin/sh
-# Recall only the bonded, trusted audio sink connected before a stack stop (toggle or suspend).
-# State is volatile: this deliberately does not change reconnect policy at boot.
+# Recall a bonded, trusted audio sink after an intentional stack restart, or on
+# the first launcher boot opportunity when the separate boot option is enabled.
 BT_RECONNECT_STATE=${BT_RECONNECT_STATE:-/tmp/nx-bt-reconnect}
+BT_BOOT_DIR=${BT_BOOT_DIR:-${USERDATA_PATH:-/mnt/SDCARD/.userdata/tg5040}}
+BT_BOOT_FILE="$BT_BOOT_DIR/bt-boot-audio"
 
 bt_valid_addr() {
+	case "$1" in *'
+'*) return 1 ;; esac
 	printf '%s\n' "$1" | LC_ALL=C grep -Eq '^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$'
 }
 
@@ -46,23 +50,149 @@ bt_seconds_left() {
 	[ "$BT_WAIT" -le "$1" ] || BT_WAIT=$1
 }
 
-bt_toggle_begin() {
-	# Atomic publication cancels any older worker before waiting for the stack lock.
+bt_state_prepare() {
 	if [ ! -d "$BT_RECONNECT_STATE" ]; then
 		(umask 077; mkdir "$BT_RECONNECT_STATE") || [ -d "$BT_RECONNECT_STATE" ] || return 1
 	fi
 	[ ! -L "$BT_RECONNECT_STATE" ] || return 1
 	[ "$(ls -nd "$BT_RECONNECT_STATE" | awk '{print $3}')" = "$(id -u)" ] || return 1
 	chmod 700 "$BT_RECONNECT_STATE" || return 1
+}
+
+bt_lock_file_prepare() {
+	[ ! -d "$BT_RECONNECT_STATE/lock" ] && [ ! -L "$BT_RECONNECT_STATE/lock" ] || return 1
+	(umask 077; touch "$BT_RECONNECT_STATE/lock") || return 1
+	chmod 600 "$BT_RECONNECT_STATE/lock"
+}
+
+bt_boot_claim() {
+	bt_state_prepare || return 1
+	# mkdir is atomic; a second launcher invocation cannot open a new window.
+	(umask 077; mkdir "$BT_RECONNECT_STATE/boot-consumed")
+}
+
+# A missing or malformed record is Off. Never source data from this file.
+bt_boot_read() {
+	bt_boot_on=0; bt_boot_addr=-
+	[ -d "$BT_BOOT_DIR" ] && [ ! -L "$BT_BOOT_DIR" ] || return 1
+	[ -f "$BT_BOOT_FILE" ] && [ ! -L "$BT_BOOT_FILE" ] || return 1
+	[ "$(wc -l < "$BT_BOOT_FILE" 2>/dev/null)" -eq 1 ] || return 1
+	bt_record=$(cat "$BT_BOOT_FILE" 2>/dev/null) || return 1
+	case "$bt_record" in *'
+'*) return 1 ;; esac
+	# Command substitution drops trailing newlines and NULs. Match the exact
+	# canonical byte length so those malformed records cannot become valid.
+	bt_record_bytes=$(wc -c < "$BT_BOOT_FILE" 2>/dev/null) || return 1
+	[ "$bt_record_bytes" -eq "$((${#bt_record} + 1))" ] || return 1
+	printf '%s\n' "$bt_record" | LC_ALL=C grep -Eq '^[01] (-|([[:xdigit:]]{2}:){5}[[:xdigit:]]{2})$' || return 1
+	bt_boot_on=${bt_record%% *}; bt_boot_addr=${bt_record#* }
+}
+
+bt_boot_enabled() {
+	bt_boot_read && [ "$bt_boot_on" = 1 ]
+}
+
+bt_pref_lock() {
+	bt_state_prepare || return 1
+	[ ! -L "$BT_RECONNECT_STATE/pref-lock" ] && [ ! -d "$BT_RECONNECT_STATE/pref-lock" ] || return 1
+	(umask 077; touch "$BT_RECONNECT_STATE/pref-lock") || return 1
+	exec 7>"$BT_RECONNECT_STATE/pref-lock" || return 1
+	bt_pref_tries=0
+	while ! busybox flock -n 7; do
+		bt_pref_tries=$((bt_pref_tries + 1))
+		[ "$bt_pref_tries" -lt 50 ] || { exec 7>&-; return 1; }
+		sleep 0.1
+	done
+}
+
+bt_boot_write() {
+	[ -d "$BT_BOOT_DIR" ] && [ ! -L "$BT_BOOT_DIR" ] || return 1
+	[ ! -L "$BT_BOOT_FILE" ] && [ ! -d "$BT_BOOT_FILE" ] || return 1
+	(umask 077; set -C; printf '%s %s\n' "$bt_boot_on" "$bt_boot_addr" > "$BT_BOOT_FILE.$$") || return 1
+	mv -f "$BT_BOOT_FILE.$$" "$BT_BOOT_FILE" || return 1
+	bt_boot_read
+}
+
+bt_boot_seed() {
+	# Select only one currently connected, saved audio sink. No paired-list guess.
+	bt_set_deadline 6 || return 0
+	bt_seconds_left 2 || return 0
+	bt_devices=$(bt_ctl "$BT_WAIT" devices Connected 2>/dev/null) || return 0
+	bt_selected=
+	for bt_addr in $(printf '%s\n' "$bt_devices" | awk '$1 == "Device" {print $2}'); do
+		bt_seconds_left 2 || return 0
+		bt_valid_addr "$bt_addr" || continue
+		bt_info=$(bt_ctl "$BT_WAIT" info "$bt_addr" 2>/dev/null) || return 0
+		if bt_property_yes "$bt_info" Connected && bt_property_yes "$bt_info" Bonded &&
+			bt_property_yes "$bt_info" Trusted && bt_audio_sink "$bt_info"; then
+			[ -z "$bt_selected" ] || return 0
+			bt_selected=$bt_addr
+		fi
+	done
+	[ -z "$bt_selected" ] || bt_boot_addr=$bt_selected
+}
+
+bt_boot_remember() {
+	bt_valid_addr "$1" || return 1
+	bt_info=$(bt_ctl 2 info "$1" 2>/dev/null) || return 1
+	# Controllers and unready headphones are valid manual connects, not save errors.
+	bt_property_yes "$bt_info" Connected && bt_property_yes "$bt_info" Bonded &&
+		bt_property_yes "$bt_info" Trusted && bt_audio_sink "$bt_info" || return 0
+	bt_pref_lock || return 1
+	bt_boot_read || :
+	bt_boot_addr=$1
+	bt_boot_write
+}
+
+bt_boot_cancel() {
+	bt_state_prepare && bt_lock_file_prepare || return 1
+	[ ! -L "$BT_RECONNECT_STATE/boot-cancel" ] || return 1
+	(umask 077; : > "$BT_RECONNECT_STATE/boot-cancel") || return 1
+	exec 8>"$BT_RECONNECT_STATE/lock" || return 1
+	bt_cancel_tries=0
+	while ! busybox flock -n 8; do
+		bt_cancel_tries=$((bt_cancel_tries + 1))
+		[ "$bt_cancel_tries" -lt 120 ] || { exec 8>&-; return 1; }
+		sleep 0.1
+	done
+	exec 8>&-
+}
+
+bt_boot_set() {
+	case "$1" in on|off) ;; *) return 1 ;; esac
+	bt_boot_cancel || return 1
+	bt_pref_lock || return 1
+	bt_boot_read || :
+	if [ "$1" = on ]; then
+		# A uniquely connected headset is newer evidence than a saved Off target.
+		bt_boot_seed
+		bt_boot_on=1
+	else
+		bt_boot_on=0
+	fi
+	bt_boot_write
+}
+
+bt_boot_forget() {
+	bt_valid_addr "$1" || return 1
+	bt_boot_cancel || return 1
+	bt_pref_lock || return 1
+	if bt_boot_read && [ "$bt_boot_addr" = "$1" ]; then
+		bt_boot_addr=-
+		bt_boot_write
+	fi
+}
+
+bt_toggle_begin() {
+	# Atomic publication cancels any older worker before waiting for the stack lock.
+	bt_state_prepare || return 1
 	BT_RECONNECT_PREVIOUS_TOKEN=$(cat "$BT_RECONNECT_STATE/token" 2>/dev/null)
 	BT_RECONNECT_TOKEN="$$.$(date +%s).$(cat /proc/sys/kernel/random/uuid 2>/dev/null)"
 	(umask 077; printf '%s\n' "$BT_RECONNECT_TOKEN" > "$BT_RECONNECT_STATE/token.$$") || return 1
 	mv -f "$BT_RECONNECT_STATE/token.$$" "$BT_RECONNECT_STATE/token" || return 1
 	# The target BusyBox provides flock; the kernel drops this lock even on SIGKILL.
 	busybox flock --help >/dev/null 2>&1 || return 1
-	[ ! -d "$BT_RECONNECT_STATE/lock" ] && [ ! -L "$BT_RECONNECT_STATE/lock" ] || return 1
-	(umask 077; touch "$BT_RECONNECT_STATE/lock") || return 1
-	chmod 600 "$BT_RECONNECT_STATE/lock" || return 1
+	bt_lock_file_prepare || return 1
 	exec 9>"$BT_RECONNECT_STATE/lock" || return 1
 	bt_lock_tries=0
 	while ! busybox flock -n 9; do
@@ -129,7 +259,7 @@ bt_run_bounded() {
 	shift
 	bt_current_pid || return 1
 	bt_parent=$BT_CURRENT_PID
-	(exec 9>&-; exec "$@") &
+	(exec 7>&- 8>&- 9>&-; exec "$@") &
 	bt_child=$!
 	if ! bt_process_identity "$bt_child" "$bt_parent"; then
 		# The child is still ours and unreaped; never wait indefinitely without
@@ -140,7 +270,7 @@ bt_run_bounded() {
 	fi
 	bt_child_identity=$BT_PROCESS_IDENTITY
 	(
-		exec 9>&-
+		exec 7>&- 8>&- 9>&-
 		busybox sleep "$bt_limit"
 		bt_kill_identity "$bt_child" "$bt_parent" "$bt_child_identity"
 	) >/dev/null 2>&1 &
@@ -210,7 +340,12 @@ bt_reconnect_log() {
 }
 
 bt_worker_current() {
-	bt_token_current && return 0
+	if bt_token_current; then
+		if [ "${BT_BOOT_MODE:-0}" -ne 1 ]; then return 0; fi
+		if [ ! -e "$BT_RECONNECT_STATE/boot-cancel" ] &&
+			bt_boot_enabled && bt_valid_addr "$bt_boot_addr" &&
+			[ "$bt_boot_addr" = "$bt_addr" ]; then return 0; fi
+	fi
 	bt_reconnect_log "cancelled by a newer Bluetooth request"
 	return 1
 }
@@ -219,6 +354,21 @@ bt_worker_time_left() {
 	bt_seconds_left "$1" && return 0
 	bt_reconnect_log "30-second reconnect window exhausted"
 	return 1
+}
+
+bt_boot_other_audio_clear() {
+	bt_worker_time_left 2 || return 1
+	bt_others=$(bt_ctl "$BT_WAIT" devices Connected 2>/dev/null) || return 1
+	for bt_other in $(printf '%s\n' "$bt_others" | awk '$1 == "Device" {print $2}'); do
+		[ "$bt_other" != "$bt_addr" ] || continue
+		bt_valid_addr "$bt_other" && bt_worker_current && bt_worker_time_left 2 || return 1
+		bt_other_info=$(bt_ctl "$BT_WAIT" info "$bt_other" 2>/dev/null) || return 1
+		if bt_property_yes "$bt_other_info" Connected && bt_audio_sink "$bt_other_info"; then
+			bt_reconnect_log "another audio device is connected; skipping boot recall"
+			return 1
+		fi
+	done
+	return 0
 }
 
 bt_worker_connect() {
@@ -230,6 +380,9 @@ bt_worker_connect() {
 		bt_worker_current && bt_worker_time_left 1 || { exec 9>&-; return 1; }
 		sleep 0.1
 	done
+	if [ "${BT_BOOT_MODE:-0}" -eq 1 ]; then
+		bt_boot_other_audio_clear || { exec 9>&-; return 1; }
+	fi
 	bt_worker_current && bt_worker_time_left 8 && bt_daemon_identity &&
 		[ "$BT_DAEMON_IDENTITY" = "$BT_RECONNECT_DAEMON_IDENTITY" ] || { exec 9>&-; return 1; }
 	bt_ctl "$BT_WAIT" connect "$bt_addr" >/dev/null 2>&1
@@ -242,6 +395,8 @@ bt_reconnect_audio() {
 	BT_RECONNECT_TOKEN=$1
 	bt_addr=$2
 	BT_RECONNECT_DAEMON_IDENTITY=$3
+	BT_BOOT_MODE=0
+	[ "${4:-}" = boot ] && BT_BOOT_MODE=1
 	bt_valid_addr "$bt_addr" && bt_worker_current || return 0
 	bt_reconnect_log "starting bounded audio recall"
 	# One bounded window per stack start; never compete continuously with phones.
@@ -282,6 +437,11 @@ bt_reconnect_audio() {
 }
 
 # The file is normally sourced by bt_init.sh; only workers execute this mode.
-if [ "$1" = reconnect_worker ]; then
-	bt_reconnect_audio "$2" "$3" "$4"
-fi
+case "$1" in
+	reconnect_worker) bt_reconnect_audio "$2" "$3" "$4" "$5" ;;
+	boot_enabled) bt_boot_enabled; exit $? ;;
+	boot_set) bt_boot_set "$2"; exit $? ;;
+	remember_boot) bt_boot_remember "$2"; exit $? ;;
+	forget_boot) bt_boot_forget "$2"; exit $? ;;
+	cancel_boot) bt_boot_cancel; exit $? ;;
+esac

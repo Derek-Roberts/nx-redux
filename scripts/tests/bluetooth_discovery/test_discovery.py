@@ -223,10 +223,11 @@ int main(void) {
         toggle = SETTINGS[SETTINGS.index('static void* bt_toggle_thread('):
                           SETTINGS.index('\nstatic int bt_get_toggle(')]
         harness = HEADERS + ENUM + r'''
-#define BT_STATIC_COUNT 3
+#define BT_STATIC_COUNT 4
 #define BT_IDX_TOGGLE 0
 #define BT_IDX_DIAG 1
 #define BT_IDX_SCAN 2
+#define BT_IDX_BOOT 3
 #define BT_MAX_ITEMS 16
 #define ITEM_BUTTON 1
 #define ITEM_STATIC 2
@@ -241,6 +242,8 @@ struct BT_device {char name[249],addr[18];int kind;};
 typedef struct SettingItem {const char* name;const char* desc;int type,visible;void(*on_press)(void);void(*custom_draw)(void);void* user_data;} SettingItem;
 typedef struct SettingsPage {SettingItem* items;int item_count,dynamic_start,max_items,selected,needs_layout;pthread_rwlock_t lock;const char* status_msg;} SettingsPage;
 static struct {int val; volatile int done,busy;} bt_toggle_ctx;
+static volatile int bt_boot_value;
+static struct {int val; volatile int done,busy,result; int handled;} bt_boot_ctx;
 static struct {volatile int done;} bt_action_ctx;
 static int bt_pair_result;
 static volatile int state=BT_DISCOVERY_IDLE, powered=1, starts,stops,refreshes,block_inventory;
@@ -252,6 +255,7 @@ static int test_create(pthread_t* t,const pthread_attr_t* a,void*(*fn)(void*),vo
 static void* bt_scanner(void*);
 static int BT_discoveryState(void) {return state;}
 static int BT_enabled(void) {return powered;}
+static int BT_bootReconnectEnabled(void) {return bt_boot_value;}
 static void BT_init(void) {}
 static void BT_enable(bool on) {powered=on;state=BT_DISCOVERY_STOPPED;}
 static void BT_discovery(int on) {if(on){starts++;state=BT_DISCOVERY_STARTING;}else{stops++;state=BT_DISCOVERY_STOPPED;}}
@@ -274,20 +278,20 @@ static void bt_device_draw(void) {}
 static void tick(SettingsPage* page) {pthread_rwlock_rdlock(&page->lock);bt_on_tick(page);pthread_rwlock_unlock(&page->lock);}
 static void await_starts(int wanted) {for(int i=0;i<100 && starts<wanted;i++)usleep(20000);assert(starts==wanted);}
 int main(void) {
- SettingItem items[BT_MAX_ITEMS]={0}; SettingsPage page={.items=items,.dynamic_start=3,.item_count=3,.max_items=BT_MAX_ITEMS};
+ SettingItem items[BT_MAX_ITEMS]={0}; SettingsPage page={.items=items,.dynamic_start=4,.item_count=4,.max_items=BT_MAX_ITEMS};
  pthread_rwlock_init(&page.lock,NULL); bt_on_show(&page); await_starts(1);
  state=BT_DISCOVERY_ACTIVE; tick(&page);
  assert(strcmp(page.status_msg,"Scanning for devices...")==0 && items[2].type==ITEM_STATIC);
  bt_scan_again(); assert(!bt_scan_requested);
  state=BT_DISCOVERY_COMPLETE; usleep(200000); assert(starts==1 && refreshes>1);
  tick(&page); assert(strcmp(page.status_msg,"Scan complete")==0 && items[2].type==ITEM_BUTTON);
- assert(page.item_count==4); // Cached result survives completion and new scan.
- bt_scan_again(); bt_scan_again(); await_starts(2); assert(page.item_count==4);
+ assert(page.item_count==5); // Cached result survives completion and new scan.
+ bt_scan_again(); bt_scan_again(); await_starts(2); assert(page.item_count==5);
  tick(&page); assert(strcmp(page.status_msg,"Starting scan...")==0);
  state=BT_DISCOVERY_ACTIVE; bt_action_ctx.done=1;bt_pair_result=BT_PAIR_FAILED;
  tick(&page); assert(strstr(page.status_msg,"Pairing failed"));
  bt_action_ctx.done=0; state=BT_DISCOVERY_COMPLETE;
- pthread_rwlock_wrlock(&page.lock);page.item_count=3;bt_on_tick(&page);
+ pthread_rwlock_wrlock(&page.lock);page.item_count=4;bt_on_tick(&page);
  assert(strcmp(page.status_msg,"No devices found. Put your device in pairing mode and scan again.")==0);
  pthread_rwlock_unlock(&page.lock);
  state=BT_DISCOVERY_FAILED; bt_scan_again(); tick(&page);

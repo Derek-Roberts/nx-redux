@@ -493,6 +493,68 @@ void PLAT_bluetoothEnable(bool shouldBeOn) {
 	pthread_mutex_unlock(&bt_discovery_ops);
 }
 
+bool PLAT_bluetoothBootReconnectSupported() {
+	return strcmp(PLATFORM, "tg5040") == 0 &&
+		access(SYSTEM_PATH "/etc/bluetooth/bt_reconnect.sh", R_OK) == 0;
+}
+
+bool PLAT_bluetoothBootReconnectEnabled() {
+	return PLAT_bluetoothBootReconnectSupported() &&
+		bt_run_cmd_deadline("sh " SYSTEM_PATH "/etc/bluetooth/bt_reconnect.sh boot_enabled",
+			NULL, 0, 2) == 0;
+}
+
+int PLAT_bluetoothBootReconnectEnable(bool on) {
+	if (!PLAT_bluetoothBootReconnectSupported())
+		return -1;
+	return bt_run_cmd_deadline(on
+		? "sh " SYSTEM_PATH "/etc/bluetooth/bt_reconnect.sh boot_set on"
+		: "sh " SYSTEM_PATH "/etc/bluetooth/bt_reconnect.sh boot_set off", NULL, 0, 30);
+}
+
+static bool bt_valid_mac(const char* addr) {
+	if (!addr || strlen(addr) != 17)
+		return false;
+	for (int i = 0; i < 17; i++) {
+		if (i % 3 == 2) {
+			if (addr[i] != ':') return false;
+		} else if (!((addr[i] >= '0' && addr[i] <= '9') ||
+				(addr[i] >= 'a' && addr[i] <= 'f') ||
+				(addr[i] >= 'A' && addr[i] <= 'F'))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static void bt_cancel_boot() {
+	if (!PLAT_bluetoothBootReconnectEnabled())
+		return;
+	// The helper inhibits future attempts and waits for an active Connect call.
+	// BlueZ may still complete a previously submitted request; never disconnect it.
+	if (bt_run_cmd_deadline("sh " SYSTEM_PATH "/etc/bluetooth/bt_reconnect.sh cancel_boot",
+			NULL, 0, 15) != 0)
+		LOG_warn("BT boot recall cancellation unavailable; continuing manual action\n");
+}
+
+static void bt_remember_boot(const char* addr) {
+	if (!PLAT_bluetoothBootReconnectSupported() || !bt_valid_mac(addr))
+		return;
+	char cmd[256];
+	snprintf(cmd, sizeof(cmd), "sh " SYSTEM_PATH "/etc/bluetooth/bt_reconnect.sh remember_boot %s", addr);
+	if (bt_run_cmd_deadline(cmd, NULL, 0, 10) != 0)
+		LOG_warn("Could not remember Bluetooth boot target\n");
+}
+
+static void bt_forget_boot(const char* addr) {
+	if (!PLAT_bluetoothBootReconnectSupported() || !bt_valid_mac(addr))
+		return;
+	char cmd[256];
+	snprintf(cmd, sizeof(cmd), "sh " SYSTEM_PATH "/etc/bluetooth/bt_reconnect.sh forget_boot %s", addr);
+	if (bt_run_cmd_deadline(cmd, NULL, 0, 20) != 0)
+		LOG_warn("Could not forget Bluetooth boot target\n");
+}
+
 bool PLAT_bluetoothDiagnosticsEnabled() {
 	return CFG_getBluetoothDiagnostics();
 }
@@ -942,6 +1004,7 @@ restore:
 }
 
 int PLAT_bluetoothPair(char* addr) {
+	bt_cancel_boot();
 	btlog("Pairing with %s\n", addr);
 	char cmd[256];
 	char output[2048];
@@ -980,10 +1043,12 @@ int PLAT_bluetoothPair(char* addr) {
 		LOG_warn("BT Connect timed out for %s; BlueZ request may still complete\n", addr);
 	if (connect_ret != 0 || strstr(output, "Failed") != NULL)
 		return BT_PAIR_CONNECT_FAILED;
+	bt_remember_boot(addr);
 	return BT_PAIR_OK;
 }
 
 void PLAT_bluetoothUnpair(char* addr) {
+	bt_cancel_boot();
 	btlog("Unpairing %s\n", addr);
 
 	char cmd[256];
@@ -997,13 +1062,15 @@ void PLAT_bluetoothUnpair(char* addr) {
 	int ret = bt_system(cmd);
 	if (ret != 0) {
 		LOG_error("BT unpair failed\n");
-	}
+	} else
+		bt_forget_boot(addr);
 
 	// Also remove from our internal discovered list
 	bt_remove_discovered_device(addr);
 }
 
 void PLAT_bluetoothConnect(char* addr) {
+	bt_cancel_boot();
 	btlog("Connecting to %s\n", addr);
 
 	char cmd[256];
@@ -1015,11 +1082,13 @@ void PLAT_bluetoothConnect(char* addr) {
 		LOG_warn("BT Connect timed out for %s; BlueZ request may still complete\n", addr);
 	if (ret != 0 || strstr(output, "Failed") != NULL) {
 		LOG_error("BT connect failed: %d\n", ret);
-	}
+	} else
+		bt_remember_boot(addr);
 	LOG_info("BT connect returned: %d\n", ret);
 }
 
 void PLAT_bluetoothDisconnect(char* addr) {
+	bt_cancel_boot();
 	btlog("Disconnecting from %s\n", addr);
 
 	char cmd[256];

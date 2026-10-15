@@ -4845,6 +4845,9 @@ FALLBACK_IMPLEMENTATION bool PLAT_bluetoothEnabled() {
 	return false;
 }
 FALLBACK_IMPLEMENTATION void PLAT_bluetoothEnable(bool on) {}
+FALLBACK_IMPLEMENTATION bool PLAT_bluetoothBootReconnectSupported() { return false; }
+FALLBACK_IMPLEMENTATION bool PLAT_bluetoothBootReconnectEnabled() { return false; }
+FALLBACK_IMPLEMENTATION int PLAT_bluetoothBootReconnectEnable(bool on) { return -1; }
 FALLBACK_IMPLEMENTATION bool PLAT_bluetoothDiagnosticsEnabled() {
 	return false;
 }

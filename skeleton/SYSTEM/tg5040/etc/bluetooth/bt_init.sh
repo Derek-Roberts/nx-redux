@@ -13,6 +13,8 @@ else
 	bt_token_current() { return 1; }
 	bt_prepare_reconnect() { return 1; }
 	bt_daemon_identity() { return 1; }
+	bt_boot_claim() { return 1; }
+	bt_boot_enabled() { return 1; }
 fi
 TRIMUI_MODEL=`strings /usr/trimui/bin/MainUI | grep ^Trimui`
 DEVICE_NAME="$TRIMUI_MODEL (NX Redux)"
@@ -91,8 +93,17 @@ start_bt() {
 start_reconnect_worker() {
 	[ "$BT_DAEMON_STARTED" -eq 1 ] && bt_prepare_reconnect &&
 		bt_daemon_identity && bt_token_current || return 0
-	(exec 9>&-; sh "$BT_RECONNECT_HELPER" reconnect_worker "$BT_RECONNECT_TOKEN" \
+	(exec 7>&- 8>&- 9>&-; sh "$BT_RECONNECT_HELPER" reconnect_worker "$BT_RECONNECT_TOKEN" \
 		"$BT_RECONNECT_TARGET" "$BT_DAEMON_IDENTITY") >/dev/null 2>&1 &
+}
+
+start_boot_worker() {
+	[ "${BT_BOOT_FIRST:-0}" -eq 1 ] && bt_token_current &&
+		bt_boot_enabled && bt_valid_addr "$bt_boot_addr" &&
+		[ ! -e "$BT_RECONNECT_STATE/boot-cancel" ] &&
+		bt_daemon_identity || return 0
+	(exec 7>&- 8>&- 9>&-; sh "$BT_RECONNECT_HELPER" reconnect_worker "$BT_RECONNECT_TOKEN" \
+		"$bt_boot_addr" "$BT_DAEMON_IDENTITY" boot) >/dev/null 2>&1 &
 }
 
 ble_start() {
@@ -170,6 +181,13 @@ stop_bt() {
 	echo "stop bluetoothd and hciattach"
 }
 
+BT_BOOT_FIRST=0
+if [ "${2:-}" = boot ]; then
+	case "$1" in
+		start|stop) bt_boot_claim && BT_BOOT_FIRST=1 ;;
+	esac
+fi
+
 case "$1" in
 	stop|restart)
 		# BusyBox ash can exit on a failed exec redirection while opening the
@@ -204,7 +222,11 @@ case "$1" in
 			exit 1
 		fi
 		start_bt
-		start_reconnect_worker
+		if [ "${2:-}" = boot ]; then
+			start_boot_worker
+		else
+			start_reconnect_worker
+		fi
 		;;
 	stop)
 		stop_bt

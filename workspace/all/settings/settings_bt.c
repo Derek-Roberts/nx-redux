@@ -27,10 +27,11 @@ typedef struct {
 // Static items
 // ============================================
 
-#define BT_STATIC_COUNT 3
+#define BT_STATIC_COUNT 4
 #define BT_IDX_SCAN 2
 #define BT_IDX_TOGGLE 0
 #define BT_IDX_DIAG 1
+#define BT_IDX_BOOT 3
 
 static const char* on_off_labels[] = {"Off", "On"};
 
@@ -82,6 +83,32 @@ static struct {
 	volatile int busy;
 } bt_toggle_ctx;
 
+// The value is cached because settings_item_sync can run on every UI update.
+// A helper process is only used when the page opens or a write completes.
+static volatile int bt_boot_value;
+static struct {
+	int val;
+	volatile int done;
+	volatile int busy;
+	volatile int result;
+	int handled;
+} bt_boot_ctx;
+
+static void* bt_boot_thread(void* arg) {
+	(void)arg;
+	bt_boot_ctx.result = BT_bootReconnectEnable(bt_boot_ctx.val ? true : false);
+	bt_boot_value = BT_bootReconnectEnabled() ? 1 : 0;
+	bt_boot_ctx.done = 1;
+	bt_boot_ctx.busy = 0;
+	return NULL;
+}
+
+static int bt_get_boot(void) {
+	return bt_boot_value;
+}
+
+static void bt_set_boot(int val);
+
 static void* bt_toggle_thread(void* arg) {
 	(void)arg;
 	BT_enable(bt_toggle_ctx.val ? true : false);
@@ -104,7 +131,7 @@ static void bt_set_toggle(int val) {
 	SettingsPage* page = settings_menu_current();
 	if (!page || !page->screen)
 		return;
-	if (bt_toggle_ctx.busy) // a toggle is still running in the background
+	if (bt_toggle_ctx.busy || bt_boot_ctx.busy) // a settings write is still running
 		return;
 
 	bt_toggle_ctx.val = val;
@@ -167,6 +194,22 @@ typedef struct {
 static BtActionCtx bt_action_ctx;
 static volatile int bt_pair_result = BT_PAIR_OK;
 
+static void bt_set_boot(int val) {
+	SettingsPage* page = settings_menu_current();
+	if (!page || !page->screen || bt_boot_ctx.busy || bt_toggle_ctx.busy || bt_action_ctx.busy)
+		return;
+	bt_boot_ctx.val = val;
+	bt_boot_ctx.handled = 0;
+	bt_action_ctx.done = 0;
+	settings_run_async(page->screen, val ? "Enabling boot reconnect..." : "Disabling boot reconnect...",
+		bt_boot_thread, NULL, &bt_boot_ctx.done, &bt_boot_ctx.busy);
+	if (!bt_boot_ctx.busy && !bt_boot_ctx.done) {
+		bt_boot_ctx.result = -1;
+		bt_boot_ctx.done = 1;
+	}
+	settings_item_sync(&page->items[BT_IDX_BOOT]);
+}
+
 static void bt_pair_worker(char* addr) {
 	bt_pair_result = BT_pair(addr);
 }
@@ -183,10 +226,11 @@ static void bt_run_action(void (*action)(char*), const char* addr, const char* m
 	if (!bt_page_ref || !bt_page_ref->screen)
 		return;
 
-	if (bt_action_ctx.busy) // a previous action is still running in the background
+	if (bt_action_ctx.busy || bt_boot_ctx.busy) // a previous action is still running
 		return;
 
 	bt_pair_result = BT_PAIR_OK;
+	bt_boot_ctx.done = 0;
 	bt_action_ctx.action = action;
 	bt_action_ctx.addr[0] = '\0';
 	strncpy(bt_action_ctx.addr, addr, sizeof(bt_action_ctx.addr) - 1);
@@ -559,6 +603,8 @@ static void* bt_scanner(void* arg) {
 
 static void bt_on_show(SettingsPage* page) {
 	BT_init();
+	if (!bt_boot_ctx.busy)
+		bt_boot_value = BT_bootReconnectEnabled() ? 1 : 0;
 
 	// Join previous scanner if it was started
 	if (bt_scanner_started) {
@@ -569,6 +615,7 @@ static void bt_on_show(SettingsPage* page) {
 	// Sync static items
 	settings_item_sync(&page->items[BT_IDX_TOGGLE]);
 	settings_item_sync(&page->items[BT_IDX_DIAG]);
+	settings_item_sync(&page->items[BT_IDX_BOOT]);
 
 	// Start scanner thread
 	pthread_mutex_lock(&bt_scan_lifecycle);
@@ -598,6 +645,10 @@ static void bt_on_hide(SettingsPage* page) {
 }
 
 static void bt_on_tick(SettingsPage* page) {
+	if (bt_boot_ctx.done && !bt_boot_ctx.handled) {
+		settings_item_sync(&page->items[BT_IDX_BOOT]);
+		bt_boot_ctx.handled = 1;
+	}
 	// Process pending layout changes from scanner thread
 	if (page->needs_layout) {
 		page->needs_layout = 0;
@@ -626,6 +677,8 @@ static void bt_on_tick(SettingsPage* page) {
 			: bt_pair_result == BT_PAIR_TRUST_FAILED
 			? "Paired, but automatic reconnection setup failed."
 			: "Paired, but connection failed. Retry Connect.";
+	} else if (bt_boot_ctx.done && bt_boot_ctx.result != 0) {
+		page->status_msg = "Could not save boot reconnect setting. Retry.";
 	} else if (!enabled) {
 		page->status_msg = NULL;
 	} else if (scanning) {
@@ -696,6 +749,17 @@ SettingsPage* bt_page_create(void) {
 		.type = ITEM_STATIC,
 		.visible = 1,
 		.on_press = bt_scan_again,
+	};
+
+	page->items[BT_IDX_BOOT] = (SettingItem){
+		.name = "Reconnect audio on boot",
+		.desc = "Reconnect the last eligible headset on the next boot",
+		.type = ITEM_CYCLE,
+		.visible = BT_bootReconnectSupported(),
+		.labels = on_off_labels,
+		.label_count = 2,
+		.get_value = bt_get_boot,
+		.set_value = bt_set_boot,
 	};
 
 	page->item_count = BT_STATIC_COUNT;

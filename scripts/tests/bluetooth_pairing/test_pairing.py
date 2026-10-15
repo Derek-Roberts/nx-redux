@@ -22,9 +22,12 @@ class PairingRegression(unittest.TestCase):
 #include <string.h>
 #define btlog(...) ((void)0)
 #define LOG_error(...) ((void)0)
+#define LOG_warn(...) snprintf(timeout_warning, sizeof(timeout_warning), __VA_ARGS__)
+#define BT_CMD_TIMED_OUT (-2)
 enum { BT_PAIR_OK=0, BT_PAIR_FAILED=-1, BT_PAIR_TRUST_FAILED=-2, BT_PAIR_CONNECT_FAILED=-3 };
 struct BT_devicePaired { char remote_addr[18], remote_name[249]; bool is_bonded, is_connected; int rssi; };
 static int scenario, trust_calls, connect_calls, removed, pair_long_calls, connect_long_calls;
+static char timeout_warning[256];
 static bool pairable = true;
 static int enable_calls, disable_calls;
 
@@ -66,7 +69,7 @@ static int bt_run_cmd(const char* cmd,char* out,size_t len) {
   return 0;
  }
  if (strstr(cmd,"trust")) { trust_calls++; if(scenario==4) snprintf(out,len,"Failed to trust"); return 0; }
- if (strstr(cmd,"connect")) { connect_calls++; if(scenario==5) return -1; return 0; }
+ if (strstr(cmd,"connect")) { connect_calls++; if(scenario==5) return BT_CMD_TIMED_OUT; if(scenario==15) return -1; return 0; }
  assert(0); return -1;
 }
 static int bt_run_cmd_long(const char* cmd,char* out,size_t len) {
@@ -85,7 +88,12 @@ int main(void) {
   assert(!trust_calls && !connect_calls && !removed);
  }
  scenario=4; assert(PLAT_bluetoothPair(addr)==BT_PAIR_TRUST_FAILED); assert(!connect_calls);
- scenario=5; assert(PLAT_bluetoothPair(addr)==BT_PAIR_CONNECT_FAILED);
+ scenario=5; timeout_warning[0]=0;
+ assert(PLAT_bluetoothPair(addr)==BT_PAIR_CONNECT_FAILED);
+ assert(connect_calls==1 && strstr(timeout_warning,"BlueZ request may still complete"));
+ scenario=15; timeout_warning[0]=0;
+ assert(PLAT_bluetoothPair(addr)==BT_PAIR_CONNECT_FAILED);
+ assert(timeout_warning[0]==0);
  scenario=0; pair_long_calls=connect_long_calls=0;
  assert(PLAT_bluetoothPair(addr)==BT_PAIR_OK);
  assert(pair_long_calls==1 && connect_long_calls==1);
@@ -137,6 +145,7 @@ int main(void) {
 #include <stddef.h>
 #include <string.h>
 #define LOG_warn(...) ((void)0)
+#define BT_CMD_TIMED_OUT (-2)
 static bool daemon_up = true;
 static int deadline_calls, timeout_seen, result = -2;
 static bool bt_daemon_alive(void) { return daemon_up; }
@@ -165,9 +174,57 @@ int main(void) {
                             str(path / 'test.c')], check=True)
             subprocess.run([str(path / 'test')], check=True)
 
+    def test_timed_out_connect_issues_no_disconnect(self):
+        source = (self.checkout / 'workspace/all/common/generic_bt.c').read_text()
+        connect = source[source.index('void PLAT_bluetoothConnect('):
+                         source.index('\nvoid PLAT_bluetoothDisconnect(')]
+        harness = r'''
+#include <assert.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#define BT_CMD_TIMED_OUT (-2)
+#define btlog(...) ((void)0)
+#define LOG_info(...) ((void)0)
+#define LOG_error(...) (errors++)
+#define LOG_warn(...) snprintf(warning, sizeof(warning), __VA_ARGS__)
+static int result, calls, errors;
+static char warning[256];
+static int bt_run_cmd_long(const char* cmd, char* out, size_t len) {
+ // A second call (including Disconnect) or a different target is forbidden.
+ assert(strcmp(cmd,"bluetoothctl connect AA:BB:CC:DD:EE:FF 2>&1")==0);
+ assert(out && len > 0);
+ out[0] = 0;
+ calls++;
+ return result;
+}
+''' + connect + r'''
+int main(void) {
+ char addr[]="AA:BB:CC:DD:EE:FF";
+ result=BT_CMD_TIMED_OUT;
+ PLAT_bluetoothConnect(addr);
+ assert(calls==1 && errors==1);
+ assert(strstr(warning,"BlueZ request may still complete"));
+ result=-1;
+ warning[0]=0;
+ PLAT_bluetoothConnect(addr);
+ assert(calls==2 && errors==2 && warning[0]==0);
+ result=0;
+ PLAT_bluetoothConnect(addr);
+ assert(calls==3 && errors==2 && warning[0]==0);
+ return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            (path / 'test.c').write_text(harness)
+            subprocess.run(['cc', '-std=c99', '-Werror', '-o', str(path / 'test'),
+                            str(path / 'test.c')], check=True)
+            subprocess.run([str(path / 'test')], check=True)
+
     def test_pair_and_connect_really_allow_more_than_five_seconds(self):
         source = (self.checkout / 'workspace/all/common/generic_bt.c').read_text()
-        executor = source[source.index('static int bt_run_cmd_deadline('):
+        executor = source[source.index('#define BT_CMD_TIMED_OUT'):
                           source.index('// Run a command with no output capture')]
         wrapper = source[source.index('static int bt_run_cmd_long('):
                          source.index('// Bluetoothctl version detection')]
@@ -182,6 +239,7 @@ int main(void) {
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
@@ -208,8 +266,19 @@ int main(void) {
  PLAT_bluetoothConnect("AA:BB:CC:DD:EE:FF");
  assert(time(NULL) - started >= 6);
  char out[32];
- assert(bt_run_cmd_deadline("printf ready; sleep 4",out,sizeof(out),1) == -1);
+ assert(bt_run_cmd_deadline("printf ready; sleep 4",out,sizeof(out),1) == BT_CMD_TIMED_OUT);
  assert(strcmp(out,"ready") == 0);
+ assert(bt_run_cmd_deadline("exit 7",out,sizeof(out),3) == 7);
+ char marker[]="/tmp/bt-timeout-child-XXXXXX";
+ int marker_fd=mkstemp(marker);
+ assert(marker_fd>=0);
+ close(marker_fd);
+ unlink(marker);
+ char command[160];
+ snprintf(command,sizeof(command),"(sleep 4; touch %s) &",marker);
+ assert(bt_run_cmd_deadline(command,out,sizeof(out),1)==BT_CMD_TIMED_OUT);
+ sleep(5);
+ assert(access(marker,F_OK)!=0); // Timed-out descendant cannot outlive its shell.
  return 0;
 }
 '''
@@ -223,7 +292,7 @@ int main(void) {
             subprocess.run(['cc', '-std=c99', '-Werror', '-o', str(path / 'test'),
                             str(path / 'test.c')], check=True)
             env = dict(__import__('os').environ, PATH=str(path) + ':' + __import__('os').environ['PATH'])
-            subprocess.run([str(path / 'test')], check=True, env=env, timeout=25)
+            subprocess.run([str(path / 'test')], check=True, env=env, timeout=35)
 
     def test_ui_state_and_fallback_contract(self):
         settings = (self.checkout / 'workspace/all/settings/settings_bt.c').read_text()

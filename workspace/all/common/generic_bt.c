@@ -90,10 +90,12 @@ static bool bt_daemon_alive(void) {
 }
 
 // Run `cmd` via /bin/sh in its own process group, reading stdout into `output`
-// (if non-NULL). Kills the whole process group and returns -1 if the command
-// hasn't finished within `timeout_s` seconds. popen()/pclose() are unusable
+// (if non-NULL). Kills the whole process group and returns BT_CMD_TIMED_OUT if
+// it exceeds `timeout_s`. popen()/pclose() are unusable
 // here: pclose() waits for the child forever, and bluetoothctl hangs on D-Bus
 // when bluetoothd is killed out from under it (e.g. by the OSD overlay).
+#define BT_CMD_TIMED_OUT -2
+
 static int bt_run_cmd_deadline(const char* cmd, char* output, size_t output_len, int timeout_s) {
 	int pipefd[2] = {-1, -1};
 	if (output && output_len > 0) {
@@ -170,17 +172,24 @@ static int bt_run_cmd_deadline(const char* cmd, char* output, size_t output_len,
 	int status = 0;
 	for (;;) {
 		pid_t r = waitpid(pid, &status, WNOHANG);
+		if (timed_out) {
+			LOG_warn("bt_run_cmd_deadline: killing timed-out command: %s\n", cmd);
+			kill(-pid, SIGKILL);
+			if (r != pid)
+				waitpid(pid, &status, 0);
+			return BT_CMD_TIMED_OUT;
+		}
 		if (r == pid)
 			break;
 		if (r < 0 && errno != EINTR) {
 			LOG_error("bt_run_cmd_deadline: waitpid failed: %s\n", strerror(errno));
 			return -1;
 		}
-		if (timed_out || time(NULL) >= deadline) {
+		if (time(NULL) >= deadline) {
 			LOG_warn("bt_run_cmd_deadline: killing timed-out command: %s\n", cmd);
 			kill(-pid, SIGKILL);
 			waitpid(pid, &status, 0);
-			return -1;
+			return BT_CMD_TIMED_OUT;
 		}
 		usleep(50 * 1000);
 	}
@@ -964,7 +973,12 @@ int PLAT_bluetoothPair(char* addr) {
 
 	// Connection alone does not imply an audio sink is ready.
 	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>&1", addr);
-	if (bt_run_cmd_long(cmd, output, sizeof(output)) != 0 || strstr(output, "Failed") != NULL)
+	int connect_ret = bt_run_cmd_long(cmd, output, sizeof(output));
+	// Disconnect can cancel a pending BlueZ Connect, but races with completion
+	// and could disconnect headphones that have just connected.
+	if (connect_ret == BT_CMD_TIMED_OUT)
+		LOG_warn("BT Connect timed out for %s; BlueZ request may still complete\n", addr);
+	if (connect_ret != 0 || strstr(output, "Failed") != NULL)
 		return BT_PAIR_CONNECT_FAILED;
 	return BT_PAIR_OK;
 }
@@ -996,6 +1010,9 @@ void PLAT_bluetoothConnect(char* addr) {
 	char output[2048];
 	snprintf(cmd, sizeof(cmd), "bluetoothctl connect %s 2>&1", addr);
 	int ret = bt_run_cmd_long(cmd, output, sizeof(output));
+	// The CLI timeout does not prove BlueZ abandoned Connect; do not disconnect here.
+	if (ret == BT_CMD_TIMED_OUT)
+		LOG_warn("BT Connect timed out for %s; BlueZ request may still complete\n", addr);
 	if (ret != 0 || strstr(output, "Failed") != NULL) {
 		LOG_error("BT connect failed: %d\n", ret);
 	}

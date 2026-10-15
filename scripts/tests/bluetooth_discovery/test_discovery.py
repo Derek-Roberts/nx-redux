@@ -187,7 +187,7 @@ esac
     def test_exit_is_bounded_even_when_bluez_property_query_hangs(self):
         globals_ = GENERIC[GENERIC.index('// Serialize session start/stop'):
                            GENERIC.index('static volatile bool bt_initialized')]
-        executor = GENERIC[GENERIC.index('static int bt_run_cmd_deadline('):
+        executor = GENERIC[GENERIC.index('#define BT_CMD_TIMED_OUT'):
                            GENERIC.index('// Run a command with no output capture')]
         session = GENERIC[GENERIC.index('static bool bt_property_yes(const char* output, const char* property);'):
                           GENERIC.index('\nint PLAT_bluetoothScan(')]

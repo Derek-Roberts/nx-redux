@@ -28,10 +28,10 @@ typedef struct {
 // ============================================
 
 #define BT_STATIC_COUNT 4
-#define BT_IDX_SCAN 2
+#define BT_IDX_SCAN 3
 #define BT_IDX_TOGGLE 0
 #define BT_IDX_DIAG 1
-#define BT_IDX_BOOT 3
+#define BT_IDX_BOOT 2
 
 static const char* on_off_labels[] = {"Off", "On"};
 
@@ -743,14 +743,6 @@ SettingsPage* bt_page_create(void) {
 		.set_value = bt_set_diag,
 	};
 
-	page->items[BT_IDX_SCAN] = (SettingItem){
-		.name = "Scan again",
-		.desc = "Put your device in pairing mode, then scan again",
-		.type = ITEM_STATIC,
-		.visible = 1,
-		.on_press = bt_scan_again,
-	};
-
 	page->items[BT_IDX_BOOT] = (SettingItem){
 		.name = "Reconnect audio on boot",
 		.desc = "Reconnect the last eligible headset on the next boot",
@@ -760,6 +752,14 @@ SettingsPage* bt_page_create(void) {
 		.label_count = 2,
 		.get_value = bt_get_boot,
 		.set_value = bt_set_boot,
+	};
+
+	page->items[BT_IDX_SCAN] = (SettingItem){
+		.name = "Scan again",
+		.desc = "Put your device in pairing mode, then scan again",
+		.type = ITEM_STATIC,
+		.visible = 1,
+		.on_press = bt_scan_again,
 	};
 
 	page->item_count = BT_STATIC_COUNT;

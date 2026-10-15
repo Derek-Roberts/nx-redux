@@ -226,8 +226,8 @@ int main(void) {
 #define BT_STATIC_COUNT 4
 #define BT_IDX_TOGGLE 0
 #define BT_IDX_DIAG 1
-#define BT_IDX_SCAN 2
-#define BT_IDX_BOOT 3
+#define BT_IDX_SCAN 3
+#define BT_IDX_BOOT 2
 #define BT_MAX_ITEMS 16
 #define ITEM_BUTTON 1
 #define ITEM_STATIC 2
@@ -281,10 +281,10 @@ int main(void) {
  SettingItem items[BT_MAX_ITEMS]={0}; SettingsPage page={.items=items,.dynamic_start=4,.item_count=4,.max_items=BT_MAX_ITEMS};
  pthread_rwlock_init(&page.lock,NULL); bt_on_show(&page); await_starts(1);
  state=BT_DISCOVERY_ACTIVE; tick(&page);
- assert(strcmp(page.status_msg,"Scanning for devices...")==0 && items[2].type==ITEM_STATIC);
+ assert(strcmp(page.status_msg,"Scanning for devices...")==0 && items[3].type==ITEM_STATIC);
  bt_scan_again(); assert(!bt_scan_requested);
  state=BT_DISCOVERY_COMPLETE; usleep(200000); assert(starts==1 && refreshes>1);
- tick(&page); assert(strcmp(page.status_msg,"Scan complete")==0 && items[2].type==ITEM_BUTTON);
+ tick(&page); assert(strcmp(page.status_msg,"Scan complete")==0 && items[3].type==ITEM_BUTTON);
  assert(page.item_count==5); // Cached result survives completion and new scan.
  bt_scan_again(); bt_scan_again(); await_starts(2); assert(page.item_count==5);
  tick(&page); assert(strcmp(page.status_msg,"Starting scan...")==0);
@@ -305,7 +305,7 @@ int main(void) {
  bt_scan_again(); assert(starts==before && !bt_scan_requested);
  block_inventory=0; pthread_join(bt_scanner_thread,NULL);bt_scanner_started=0;
  fail_create=1;bt_on_show(&page);assert(bt_scanner_failed && !bt_scan_requested && !bt_scanner_started);
- tick(&page);assert(items[2].type==ITEM_BUTTON);
+ tick(&page);assert(items[3].type==ITEM_BUTTON);
  bt_scan_again(); await_starts(before+1);assert(!bt_scanner_failed);
  bt_on_hide(&page);pthread_join(bt_scanner_thread,NULL);
  return 0;

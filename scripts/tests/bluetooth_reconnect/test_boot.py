@@ -1,6 +1,7 @@
 """Host regressions for the opt-in tg5040 boot headphone recall policy."""
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,22 @@ busybox() { case "$1" in flock) return 0;; esac; return 1; }
         self.preference.symlink_to(outside)
         self.run_shell('! bt_boot_enabled; ! bt_boot_set off')
         self.assertEqual(outside.read_text(), f'1 {AUDIO}\n')
+
+    def test_bluetooth_static_rows_keep_requested_order(self):
+        source = (ROOT / 'workspace/all/settings/settings_bt.c').read_text()
+        indices = {name: int(index) for name, index in re.findall(
+            r'^#define BT_IDX_(\w+) (\d+)$', source, re.MULTILINE)}
+        create = source[source.index('SettingsPage* bt_page_create(void) {'):
+                        source.index('void bt_page_destroy(')]
+        rows = re.findall(
+            r'page->items\[BT_IDX_(\w+)\] = \(SettingItem\)\{\s*\.name = "([^"]+)"',
+            create)
+        expected = ['Bluetooth', 'Bluetooth diagnostics',
+                    'Reconnect audio on boot', 'Scan again']
+        self.assertEqual([name for _, name in rows], expected)
+        self.assertEqual([name for key, name in sorted(rows, key=lambda row: indices[row[0]])],
+                         expected)
+        self.assertEqual(len(rows), len(expected))
 
     def test_boot_opportunity_is_claimed_only_once(self):
         self.run_shell('bt_boot_claim; ! bt_boot_claim')
@@ -257,8 +274,8 @@ int main(void) {
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
-#define BT_IDX_BOOT 3
-#define BT_IDX_SCAN 2
+#define BT_IDX_BOOT 2
+#define BT_IDX_SCAN 3
 #define ITEM_BUTTON 1
 #define ITEM_STATIC 2
 #define BT_PAIR_OK 0

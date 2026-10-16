@@ -15,10 +15,12 @@ Shell printf mocks alone do not reproduce this buffering behavior.
 Settings tests distinguish cached refreshes from radio sessions, exercise one
 automatic scan plus explicit retries, retain cached results, guard overlapping
 requests, recover scanner creation failure, queue a scan after enabling, stop on
-page exit and prioritize pairing errors. Rendering tests route progress and errors
-to the existing wrapped description area even with a full, scrolled list. Other
-pages retain their existing status rendering. No screenshot or hardware scan was
-validated by these host tests.
+page exit and prioritize pairing errors. Rendering tests route routine scan
+progress and completion to the existing Network-style status area below the list,
+preserving help for the selected row. Pairing and scan errors, boot-setting errors,
+and long no-device guidance use the wrapped description area; tests also verify
+that normal placement returns after an error. Other pages retain their existing
+status rendering. No screenshot or hardware scan was validated by these host tests.
 
 Discovery is active only after this child's `Discovery started` reply and a live
 BlueZ `Discovering: yes` observation. In BlueZ 5.78, `rl_init` returns before

@@ -82,9 +82,11 @@ path does not change the separate stop/start recall behavior described above.
 Cancellation stops subsequent attempts, but a Connect already submitted to BlueZ
 may still complete.
 
-These are host-verified policy and process bounds. This commit has no headset
-hardware boot trial, so actual radio reconnection and audible playback at boot
-remain unverified.
+The policy and process bounds are host-tested. On 2026-10-15, tg5040 hardware
+checks confirmed audible automatic headphone reconnection with the setting On,
+no automatic reconnection with it Off, and a responsive system when the saved
+headphones were unavailable. These checks do not measure every timing bound or
+establish behavior for other headset models.
 
 ## Restart hardware acceptance
 
@@ -97,8 +99,8 @@ Pro on 2026-10-14. The original a3d48994 build failed the toggle trial; acceptan
 applies to that build plus this fix. Device evidence records fresh Bluetooth
 processes, restored connection, and 97.382 seconds of successful suspend without
 reboot. Automatic audible recovery was user-confirmed; audio timing was not
-independently measured. Endurance, unavailable-headset, and controller hardware
-cases remain untested.
+independently measured. Endurance, unavailable-headset restart, and controller
+hardware cases remain untested.
 
 ## Verification
 

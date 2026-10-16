@@ -447,7 +447,7 @@ void selectScaler(int src_w, int src_h, int src_p) {
 	renderer.true_w = src_w;
 	renderer.true_h = src_h;
 
-	// TODO: this is saving non-rgb30 devices from themselves...or rather, me
+	// cropped scaling at HDMI resolution falls back to native
 	int scaling = screen_scaling;
 	if (scaling == SCALE_CROPPED && DEVICE_WIDTH == HDMI_WIDTH) {
 		scaling = SCALE_NATIVE;
@@ -473,12 +473,7 @@ void selectScaler(int src_w, int src_h, int src_p) {
 				src_y = -oy;
 			else
 				dst_y = oy;
-		}
-		// TODO: this is all kinds of messed up
-		// TODO: is this blowing up because the smart has to rotate before scaling?
-		// TODO: or is it just that I'm trying to cram 4 logical rects into 2 rect arguments
-		// TODO: eg. src.size + src.clip + dst.size + dst.clip
-		else if (scaling == SCALE_CROPPED) {
+		} else if (scaling == SCALE_CROPPED) {
 			int scale_x = CEIL_DIV(DEVICE_WIDTH, src_w);
 			int scale_y = CEIL_DIV(DEVICE_HEIGHT, src_h);
 			scale = MIN(scale_x, scale_y);
@@ -527,14 +522,11 @@ void selectScaler(int src_w, int src_h, int src_p) {
 			scale_y -= 1;
 
 		scale = MAX(scale_x, scale_y);
-		// if (scale>4) scale = 4;
-		// if (scale>2) scale = 4; // TODO: restore, requires sanity checking
 
 		int scaled_w = src_w * scale;
 		int scaled_h = src_h * scale;
 
 		if (scaling == SCALE_FULLSCREEN) {
-			// type = 'full (oversized)';
 			dst_w = scaled_w;
 			dst_h = scaled_h;
 			dst_p = dst_w * FIXED_BPP;
@@ -552,9 +544,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 				scale = 1;
 			aspect = (double)src_w / src_h;
 
-			// Optionally, clamp to a max scale (e.g., 4x) if needed
-			// if (scale > 4) scale = 4;
-
 			int scaled_w = src_w * scale;
 			int scaled_h = src_h * scale;
 
@@ -567,7 +556,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 			dst_p = dst_w * FIXED_BPP;
 		} else {
 			double src_aspect_ratio = ((double)src_w) / src_h;
-			// double core_aspect_ratio
 			double fixed_aspect_ratio = ((double)DEVICE_WIDTH) / DEVICE_HEIGHT;
 			int core_aspect = core.aspect_ratio * 1000;
 			int fixed_aspect = fixed_aspect_ratio * 1000;
@@ -584,9 +572,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 
 			if (core_aspect > fixed_aspect) {
 				// letterbox
-				// dst_w = scaled_w;
-				// dst_h = scaled_w / fixed_aspect_ratio;
-				// dst_h += dst_h%2;
 				int aspect_h = DEVICE_WIDTH / core.aspect_ratio;
 				double aspect_hr = ((double)aspect_h) / DEVICE_HEIGHT;
 				dst_w = scaled_w;
@@ -595,9 +580,6 @@ void selectScaler(int src_w, int src_h, int src_p) {
 				dst_y = (dst_h - scaled_h) / 2;
 			} else if (core_aspect < fixed_aspect) {
 				// pillarbox
-				// dst_w = scaled_h * fixed_aspect_ratio;
-				// dst_w += dst_w%2;
-				// dst_h = scaled_h;
 				int aspect_w = DEVICE_HEIGHT * core.aspect_ratio;
 				double aspect_wr = ((double)aspect_w) / DEVICE_WIDTH;
 				dst_w = scaled_w / aspect_wr;
@@ -647,7 +629,6 @@ static void screen_flip(SDL_Surface* screen) {
 		GFX_flip_fixed_rate(screen, core.fps);
 	} else {
 		GFX_GL_Swap();
-		// GFX_flip(screen);
 	}
 }
 
@@ -767,6 +748,12 @@ static uint32_t last_flip_time = 0;
 // let fceumm (~5.4 ms a frame) run only two frames per vblank: 2x at any Max FF
 // Speed. 30 ms shows FF at ~30 fps and leaves the rest of the time to the core.
 #define FF_FRAME_INTERVAL_MS 30
+
+// Whether the next fast-forward frame would be shown. The frames in between are
+// dropped, so cores that honor GET_AUDIO_VIDEO_ENABLE are told not to draw them.
+int Video_ffFrameDue(void) {
+	return SDL_GetTicks() - last_flip_time >= FF_FRAME_INTERVAL_MS;
+}
 
 static void video_refresh_callback_main(const void* data, unsigned width, unsigned height, size_t pitch) {
 	// return;

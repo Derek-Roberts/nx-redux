@@ -25,7 +25,7 @@
 | Left | ABS_HAT0X | -1 | 1096 |
 | Right | ABS_HAT0X | +1 | 1090 |
 
-## D-pad (Joystick mode — FN toggle)
+## D-pad (Joystick mode)
 
 | Direction | Linux Event | Value | SDL Axis |
 |-----------|-------------|-------|----------|
@@ -45,8 +45,11 @@
 
 | Event | Value | Meaning |
 |-------|-------|---------|
-| SW_TABLET_MODE | 1 | Joystick mode ON |
-| SW_TABLET_MODE | 0 | Joystick mode OFF (hat mode) |
+| SW_TABLET_MODE | 1 | FN switch on |
+| SW_TABLET_MODE | 0 | FN switch off |
+
+NX Redux uses the FN switch for night mode only (keymon reads it from GPIO 243
+and calls `SetFnMode`); it no longer changes the D-pad mode.
 
 ## Notes
 
@@ -162,7 +165,7 @@ never emit that code; Menu long-press opens the OSD on all of them.
 - **These SDL indices are inherited from upstream NextUI's Brick Pro support
   (PR #766 and its `fix: L4 and R4 button mappings` follow-up) and have not yet
   been confirmed on hardware here.** Everything else in the Brick Pro port was
-  verified against the stock `sd_recovery_tg4040_brickpro_ver1.1.1_20260717.img`
+  verified against the stock `sd_recovery_tg4040_brick_pro_v1.1.1_20260717.img`
   rootfs.
 - `/usr/trimui/bin/trimui_inputd` exists on the Brick Pro, so the tg5040 boot
   path (which starts the device's own stock input daemon by absolute path rather

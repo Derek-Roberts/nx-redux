@@ -228,6 +228,10 @@ void settings_menu_handle_input(bool* quit, bool* dirty) {
 	// Tick callback (for dynamic pages)
 	if (page->on_tick)
 		page->on_tick(page);
+	int updated_vis_count = settings_page_visible_count(page);
+	if (updated_vis_count != vis_count)
+		*dirty = true;
+	vis_count = updated_vis_count;
 
 	if (vis_count == 0) {
 		if (has_lock)

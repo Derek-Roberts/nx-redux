@@ -259,7 +259,7 @@ static void handle_ctx_rename(ImageEntry* e) {
 }
 
 // Delete flow for the MENU > Delete item: blocking confirm modal, then the
-// matching fileops call. Per the brief, the listing is only reloaded on
+// matching fileops call. The listing is only reloaded on
 // success; a failed delete just toasts (deleteTree's own best-effort
 // continuation means a partial failure is rare and not worth reloading for).
 static void handle_ctx_delete(ImageEntry* e, int target_index) {
@@ -479,6 +479,9 @@ int main(int argc, char* argv[]) {
 					browser_toast_time = SDL_GetTicks();
 				}
 				IvViewer_close();
+				// A rotated file's preview (and its size line) must be re-read.
+				if (IvViewer_filesChanged())
+					preview_have[0] = '\0';
 				app_screen = SCREEN_BROWSER;
 				UI_clearToast();
 				// A preview request for the still-selected file may have been

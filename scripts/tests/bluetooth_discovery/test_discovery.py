@@ -246,7 +246,7 @@ static volatile int bt_boot_value;
 static struct {int val; volatile int done,busy,result; int handled;} bt_boot_ctx;
 static struct {volatile int done;} bt_action_ctx;
 static int bt_pair_result;
-static volatile int state=BT_DISCOVERY_IDLE, powered=1, starts,stops,refreshes,block_inventory;
+static volatile int state=BT_DISCOVERY_IDLE, powered=1, starts,stops,refreshes,block_inventory,insert_device;
 static int fail_create;
 static int test_create(pthread_t* t,const pthread_attr_t* a,void*(*fn)(void*),void* arg) {
  if(fail_create) { fail_create=0; return EAGAIN; } return pthread_create(t,a,fn,arg);
@@ -267,27 +267,48 @@ static int BT_pairedDevices(struct BT_devicePaired* p,int max) {
  refreshes++; while(block_inventory) usleep(20000); return 0;
 }
 static int BT_availableDevices(struct BT_device* p,int max) {
- snprintf(p[0].name,sizeof(p[0].name),"Controller"); snprintf(p[0].addr,sizeof(p[0].addr),"AA:BB:CC:DD:EE:FF"); return 1;
+ if(insert_device) {
+  snprintf(p[0].name,sizeof(p[0].name),"New device"); snprintf(p[0].addr,sizeof(p[0].addr),"11:22:33:44:55:66");
+ }
+ int old=insert_device?1:0;
+ snprintf(p[old].name,sizeof(p[old].name),"Controller"); snprintf(p[old].addr,sizeof(p[old].addr),"AA:BB:CC:DD:EE:FF"); return old+1;
 }
-static int settings_page_visible_count(SettingsPage* p) {return p->item_count;}
-static SettingItem* settings_page_visible_item(SettingsPage* p,int i) {return &p->items[i];}
-static int settings_page_actual_to_visible(SettingsPage* p,int i) {return i;}
+static int settings_page_visible_count(SettingsPage* p) {
+ int count=0;for(int i=0;i<p->item_count;i++)count+=p->items[i].visible;return count;
+}
+static SettingItem* settings_page_visible_item(SettingsPage* p,int i) {
+ for(int j=0;j<p->item_count;j++)if(p->items[j].visible && i--==0)return &p->items[j];return NULL;
+}
+static int settings_page_actual_to_visible(SettingsPage* p,int i) {
+ int count=0;for(int j=0;j<p->item_count;j++){if(!p->items[j].visible)continue;if(j==i)return count;count++;}return -1;
+}
 static void bt_device_press(void) {}
 static void bt_device_draw(void) {}
 ''' + info + globals_ + toggle + callback + scanner + r'''
 static void tick(SettingsPage* page) {pthread_rwlock_rdlock(&page->lock);bt_on_tick(page);pthread_rwlock_unlock(&page->lock);}
 static void await_starts(int wanted) {for(int i=0;i<100 && starts<wanted;i++)usleep(20000);assert(starts==wanted);}
+static void await_items(SettingsPage* p,int count) {for(int i=0;i<100 && p->item_count!=count;i++)usleep(20000);assert(p->item_count==count);}
 int main(void) {
  SettingItem items[BT_MAX_ITEMS]={0}; SettingsPage page={.items=items,.dynamic_start=4,.item_count=4,.max_items=BT_MAX_ITEMS};
+ for(int i=0;i<3;i++)items[i].visible=1;
+ items[3].type=ITEM_BUTTON;
  pthread_rwlock_init(&page.lock,NULL); bt_on_show(&page); await_starts(1);
  state=BT_DISCOVERY_ACTIVE; tick(&page);
- assert(strcmp(page.status_msg,"Scanning for devices...")==0 && !page.status_in_description && items[3].type==ITEM_STATIC);
+ assert(strcmp(page.status_msg,"Scanning for devices...")==0 && !page.status_in_description && !items[3].visible);
+ await_items(&page,5);
+ page.selected=3; // First device is visible index 3 while the scan row is hidden.
+ insert_device=1;bt_needs_refresh=1;await_items(&page,6);
+ assert(page.selected==4 && strcmp(((BtDeviceInfo*)items[5].user_data)->addr,"AA:BB:CC:DD:EE:FF")==0);
+ insert_device=0;bt_needs_refresh=1;await_items(&page,5);
+ assert(page.selected==3);
  bt_scan_again(); assert(!bt_scan_requested);
  state=BT_DISCOVERY_COMPLETE; usleep(200000); assert(starts==1 && refreshes>1);
- tick(&page); assert(strcmp(page.status_msg,"Scan complete")==0 && !page.status_in_description && items[3].type==ITEM_BUTTON);
+ tick(&page); assert(strcmp(page.status_msg,"Scan complete")==0 && !page.status_in_description && items[3].visible);
  assert(page.item_count==5); // Cached result survives completion and new scan.
+ page.selected=4; // Keep the device selected as the scan row appears and disappears.
  bt_scan_again(); bt_scan_again(); await_starts(2); assert(page.item_count==5);
- tick(&page); assert(strcmp(page.status_msg,"Starting scan...")==0 && !page.status_in_description);
+ tick(&page); assert(strcmp(page.status_msg,"Starting scan...")==0 && !page.status_in_description && !items[3].visible && page.selected==3);
+ state=BT_DISCOVERY_COMPLETE; tick(&page); assert(items[3].visible && page.selected==4);
  state=BT_DISCOVERY_ACTIVE; bt_action_ctx.done=1;bt_pair_result=BT_PAIR_FAILED;
  tick(&page); assert(strstr(page.status_msg,"Pairing failed") && page.status_in_description);
  bt_action_ctx.done=0; tick(&page);
@@ -313,7 +334,7 @@ int main(void) {
  bt_scan_again(); assert(starts==before && !bt_scan_requested);
  block_inventory=0; pthread_join(bt_scanner_thread,NULL);bt_scanner_started=0;
  fail_create=1;bt_on_show(&page);assert(bt_scanner_failed && !bt_scan_requested && !bt_scanner_started);
- tick(&page);assert(items[3].type==ITEM_BUTTON);
+ tick(&page);assert(items[3].visible && items[3].type==ITEM_BUTTON);
  bt_scan_again(); await_starts(before+1);assert(!bt_scanner_failed);
  bt_on_hide(&page);pthread_join(bt_scanner_thread,NULL);
  return 0;

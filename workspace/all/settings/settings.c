@@ -282,7 +282,7 @@ static int menu_style_values[] = {MENU_STYLE_LIST, MENU_STYLE_GRID, MENU_STYLE_C
 static const char* orient_labels[] = {"Horizontal", "Vertical"};
 static int orient_values[] = {MENU_ORIENT_HORIZONTAL, MENU_ORIENT_VERTICAL};
 static SettingItem* menu_orient_items[MENU_CAT_COUNT] = {NULL};
-/* Each tab's layout row (and the Consoles controller row): shown only while that tab is (sync_layouts_rows) */
+/* Each tab's layout row (and the Consoles background row): shown only while that tab is (sync_layouts_rows) */
 static SettingItem* menu_style_items[MENU_CAT_COUNT] = {NULL};
 static SettingItem* menu_controller_item = NULL;
 static SettingsPage layouts_page; // defined with the page below (sync_layouts_rows clamps its scroll)
@@ -812,7 +812,7 @@ static void reset_home_style(void) {
 	CFG_setHomeStyle(CFG_DEFAULT_HOMESTYLE);
 }
 
-/* Controller art: what the List draws behind the Consoles tab */
+/* Consoles background: what draws behind the Consoles tab */
 static const char* console_art_labels[] = {"Controller", "Background", "None"};
 static int console_art_values[] = {CONSOLE_ART_CONTROLLER, CONSOLE_ART_BACKGROUND, CONSOLE_ART_NONE};
 static int get_console_art(void) {
@@ -1483,8 +1483,7 @@ static void show_simple_mode_help(void) {
 // Emulator shortcut callbacks
 // ============================================
 
-// minarch reads these at every game launch (common/emu_shortcuts.h); every
-// change is written straight away.
+// minarch reads these at every game launch (common/emu_shortcuts.h).
 static int shortcut_labels[SHORTCUT_COUNT];
 static char shortcuts_path[MAX_PATH];
 static int shortcuts_dirty = 0;
@@ -1896,7 +1895,7 @@ static void build_menu_tree(const DeviceInfo* dev) {
 	// Layouts page (main page category)
 	// ============================
 	idx = 0;
-	// Grouped by what they shape: each tab's show row, then its layout, orientation and controller rows (shown only
+	// Grouped by what they shape: each tab's show row, then its layout, orientation and background rows (shown only
 	// while the tab is, sync_layouts_rows), then the game lists' rows, then the rows for everything, then the boot view
 	// and the Game Switcher.
 #define LAYOUTS_CYCLE_ROW(_label, _desc, _labels, _count, _values, _get, _set, _reset)                 \
@@ -1933,9 +1932,9 @@ static void build_menu_tree(const DeviceInfo* dev) {
 					   get_menu_orient_consoles, set_menu_orient_consoles, reset_menu_orient_consoles);
 	menu_controller_item = &layouts_items[idx];
 	LAYOUTS_CYCLE_ROW(
-		"Consoles controller",
-		"What shows behind the Consoles tab in the List style: each console's controller, your own background "
-		"pictures (bg.png), or nothing.",
+		"Consoles background",
+		"What shows with the Consoles tab: each console's controller, your own background pictures (bg.png), "
+		"or nothing.",
 		console_art_labels, CONSOLE_ART_COUNT, console_art_values, get_console_art, set_console_art, reset_console_art);
 
 	layouts_items[idx++] = (SettingItem)ITEM_CYCLE_INIT(

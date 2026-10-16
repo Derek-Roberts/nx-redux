@@ -502,7 +502,7 @@ static void* bt_scanner(void* arg) {
 		// Save selected addr for restoration
 		char selected_addr[18] = "";
 		pthread_rwlock_rdlock(&page->lock);
-		if (page->selected >= page->dynamic_start && page->dynamic_start >= 0) {
+		if (page->dynamic_start >= 0) {
 			SettingItem* sel = settings_page_visible_item(page, page->selected);
 			if (sel && sel->user_data) {
 				BtDeviceInfo* info = (BtDeviceInfo*)sel->user_data;
@@ -652,14 +652,6 @@ static void bt_on_tick(SettingsPage* page) {
 		settings_item_sync(&page->items[BT_IDX_BOOT]);
 		bt_boot_ctx.handled = 1;
 	}
-	// Process pending layout changes from scanner thread
-	if (page->needs_layout) {
-		page->needs_layout = 0;
-		int vis = settings_page_visible_count(page);
-		if (page->selected >= vis && vis > 0)
-			page->selected = vis - 1;
-	}
-
 	int state = BT_discoveryState();
 	pthread_mutex_lock(&bt_scan_lifecycle);
 	int pending = bt_scan_requested;
@@ -668,10 +660,27 @@ static void bt_on_tick(SettingsPage* page) {
 	bool scanning = state == BT_DISCOVERY_ACTIVE;
 	bool waiting = pending || state == BT_DISCOVERY_STARTING;
 	SettingItem* scan = &page->items[BT_IDX_SCAN];
-	scan->type = enabled && !waiting && !scanning && !bt_toggle_ctx.busy
-		? ITEM_BUTTON : ITEM_STATIC;
-	scan->desc = scanning ? "Wait for this scan to finish"
-		: "Put your device in pairing mode, then scan again";
+	int show_scan = enabled && !waiting && !scanning && !bt_toggle_ctx.busy;
+	if (scan->visible != show_scan) {
+		if (scan->visible) {
+			int scan_idx = settings_page_actual_to_visible(page, BT_IDX_SCAN);
+			if (page->selected >= scan_idx)
+				page->selected = page->selected == scan_idx ? scan_idx - 1 : page->selected - 1;
+			scan->visible = 0;
+		} else {
+			scan->visible = 1;
+			int scan_idx = settings_page_actual_to_visible(page, BT_IDX_SCAN);
+			if (page->selected >= scan_idx)
+				page->selected++;
+		}
+	}
+	// The scanner may have removed devices while the scan row changed visibility.
+	if (page->needs_layout) {
+		page->needs_layout = 0;
+		int vis = settings_page_visible_count(page);
+		if (page->selected >= vis && vis > 0)
+			page->selected = vis - 1;
+	}
 
 	// Pairing failures take priority over discovery progress and completion.
 	if (bt_action_ctx.done && bt_pair_result != BT_PAIR_OK) {
@@ -766,8 +775,8 @@ SettingsPage* bt_page_create(void) {
 	page->items[BT_IDX_SCAN] = (SettingItem){
 		.name = "Scan again",
 		.desc = "Put your device in pairing mode, then scan again",
-		.type = ITEM_STATIC,
-		.visible = 1,
+		.type = ITEM_BUTTON,
+		.visible = 0,
 		.on_press = bt_scan_again,
 	};
 

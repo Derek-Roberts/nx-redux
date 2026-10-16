@@ -4,7 +4,7 @@ Bring-up reference for the Trimui Brick Pro. Distilled from the port
 (`c0da09c7`, PR #53) and the on-hardware verification session of **2026-08-02**
 (first unit with redux installed). Keep this as the durable "do not re-derive"
 record; the live to-do list of anything still unverified lives in
-`DEV_CHECKLIST.md`.
+`.dev/DEV_CHECKLIST.md`.
 
 The Brick Pro is a **tg5040 build** — `PLATFORM=tg5040`, `DEVICE=brickpro`. It
 runs the same tg5040 binaries as the plain Brick; the differences below are all
@@ -15,12 +15,13 @@ memory note on shared-code device detection).
 ## Build and flash
 
 ```bash
-make all                          # produces releases/NextUI-<date>[-branch]-brickpro.zip
+make all                          # produces releases/NXRedux-<date>[-branch]-brickpro.zip
 make deploy DEVICE=brickpro       # push MinUI.zip over adb + reboot (single-binary iterate)
 ```
 
 Copy the `-brickpro` zip to the SD card as `MinUI.zip` and boot. `make deploy`
-without `DEVICE=` deploys `brick`, not the Pro.
+with neither `DEVICE=` nor `PLATFORM=` stops with an error, and `PLATFORM=tg5040`
+alone deploys `brick` (the platform's first device), not the Pro.
 
 ## How it differs from the plain Brick
 
@@ -40,7 +41,7 @@ and tuned by eye with the hidden `uiscale_dev=` override (see `.dev/DEVICES.md`,
 | `BTN_FN1/FN2` (music F1/F2 etc.) | L3/R3 | **L4/R4** |
 | HOME button | none | **gamepad btn 15** (`KEY_HOMEPAGE`/172) |
 | Volume +/- (`JOY_PLUS/MINUS`) | 14 / 13 | 14 / 13 |
-| LED zones (`MAX_LIGHTS`) | 4 | **5** |
+| LED zones (`PLAT_getLedCount`) | 4 | **5** |
 | LED brightness nodes | `max_scale`, `max_scale_lr` | + `max_scale_f1f2`, `max_scale_rear` |
 
 Paks that act on the function keys **must** use `BTN_FN1`/`BTN_FN2`, not a
@@ -51,7 +52,7 @@ key (this was the music-player L3/R3→L4/R4 bug fixed 2026-08-02).
 
 Confirmed by reading the stock rootfs out of
 `sd_recovery_tg4040_brick_pro_v1.1.1_20260717.img` (ext4 at sector 126432;
-recipe in `../../OSD.md`) **and** live over adb on the unit, stock firmware
+recipe in `../../.dev/OSD.md`) **and** live over adb on the unit, stock firmware
 v1.1.1 / kernel 4.9.191 sun50iw10:
 
 - `TRIMUI_MODEL` / MainUI model string is exactly `Trimui Brick Pro` →
@@ -125,10 +126,10 @@ background (plain black there) lacks — 138 px total, judged negligible. Restor
 
 ## PortMaster
 
-Brick Pro is detected as `trimui-brick-pro` via a marker override the
-PortMaster tool pak's `launch.sh` (Xtras catalog `portmaster/pak/launch.sh`)
-applies to `device_info.txt` / `hardware.py` before and after every pugwash
-run.
+Brick Pro is detected as `TrimUI Brick Pro` (with its two sticks) via the
+patches the PortMaster tool pak's `launch.sh` (Xtras catalog
+`portmaster/pak/launch.sh`) applies to `device_info.txt` before and after every
+pugwash run (`patch_device_info_trimui`, `patch_device_info_brickpro_sticks`).
 Without it PortMaster collapsed the Pro onto plain `trimui-brick` (shared
 1024×768 resolution ambiguity), hiding analog-stick ports. Verified on device
 2026-08-02.
@@ -143,8 +144,9 @@ Without it PortMaster collapsed the Pro onto plain `trimui-brick` (shared
   `nextui`/`minarch` need a reboot after pushing; other paks just need to not
   be running.
 - **Never** `killall nextui` on device: the `kill -9` path powers the unit off.
-- Rumble is capped at 2.5 V (`MAX_VOLTAGE` in `platform.c`, `/sys/class/motor/voltage`);
-  the FN-switch mute pulse uses 900000 µV (`keymon.c`, double 100 ms pulse on gpio227);
-  backlight uses the Brick brightness curve (`scaleBrightness`, UI level 0 → raw 1 via the
-  `/dev/disp` `DISP_LCD_SET_BRIGHTNESS` ioctl). All three verified on hardware 2026-08-02:
-  2.5 V is comfortable at max, the mute buzz fires, and raw 1 stays visible (not black).
+- Rumble is capped at 1.7 V (`RUMBLE_MAX_VOLTAGE_BRICKPRO` in `platform.h`, used by
+  `MAX_VOLTAGE` in `platform.c`, `/sys/class/motor/voltage`; lowered from 2.5 V after
+  2026-09-15 feedback); the FN-on (night mode) confirmation buzz uses 2.0 V (`keymon.c`,
+  double 100 ms pulse on gpio227); backlight uses the Brick brightness curve
+  (`scaleBrightness`, UI level 0 → raw 1 via the `/dev/disp` `DISP_LCD_SET_BRIGHTNESS`
+  ioctl). Raw 1 was verified visible (not black) on hardware 2026-08-02.
